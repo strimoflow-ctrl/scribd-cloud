@@ -12,50 +12,55 @@ const { PDFDocument, StandardFonts, rgb, degrees, PDFName, PDFString } = require
 
 puppeteer.use(StealthPlugin());
 
-function addClickableWatermark(pdfDoc, pdfPage, font, botUsername = 'ScribdPdfDownloaderBot') {
-  const { width, height } = pdfPage.getSize();
-  const badgeWidth = 140;
-  const badgeHeight = 22;
-  const margin = 10;
-  const x = width - badgeWidth - margin;
-  const y = height - badgeHeight - margin;
+function addClickableWatermark(pdfDoc, pdfPage, font, botUsername = 'cryvex_uploader_bot') {
+  try {
+    const cleanUsername = String(botUsername || 'cryvex_uploader_bot').trim().replace(/^@+/, '');
+    const { width, height } = pdfPage.getSize();
+    const badgeWidth = 145;
+    const badgeHeight = 22;
+    const margin = 10;
+    const x = width - badgeWidth - margin;
+    const y = height - badgeHeight - margin;
 
-  pdfPage.drawRectangle({
-    x, y,
-    width: badgeWidth,
-    height: badgeHeight,
-    color: rgb(0.04, 0.04, 0.06),
-    opacity: 0.88,
-    borderColor: rgb(0.95, 0.77, 0.06),
-    borderWidth: 1.0,
-  });
+    pdfPage.drawRectangle({
+      x, y,
+      width: badgeWidth,
+      height: badgeHeight,
+      color: rgb(0.04, 0.04, 0.06),
+      opacity: 0.88,
+      borderColor: rgb(0.95, 0.77, 0.06),
+      borderWidth: 1.0,
+    });
 
-  pdfPage.drawText(`⚡ @${botUsername}`, {
-    x: x + 8,
-    y: y + 6,
-    size: 9.5,
-    font,
-    color: rgb(0.95, 0.77, 0.06),
-  });
+    pdfPage.drawText(`@${cleanUsername}`, {
+      x: x + 10,
+      y: y + 6,
+      size: 9.5,
+      font,
+      color: rgb(0.95, 0.77, 0.06),
+    });
 
-  const linkUrl = `https://t.me/${botUsername}`;
-  const linkAnnot = pdfDoc.context.obj({
-    Type: 'Annot',
-    Subtype: 'Link',
-    Rect: [x, y, x + badgeWidth, y + badgeHeight],
-    Border: [0, 0, 0],
-    A: {
-      Type: 'Action',
-      S: 'URI',
-      URI: PDFString.of(linkUrl)
+    const linkUrl = `https://t.me/${cleanUsername}`;
+    const linkAnnot = pdfDoc.context.obj({
+      Type: 'Annot',
+      Subtype: 'Link',
+      Rect: [x, y, x + badgeWidth, y + badgeHeight],
+      Border: [0, 0, 0],
+      A: {
+        Type: 'Action',
+        S: 'URI',
+        URI: PDFString.of(linkUrl)
+      }
+    });
+
+    const annotsRef = pdfPage.node.Annots();
+    if (annotsRef) {
+      annotsRef.push(linkAnnot);
+    } else {
+      pdfPage.node.set(PDFName.of('Annots'), pdfDoc.context.obj([linkAnnot]));
     }
-  });
-
-  const annotsRef = pdfPage.node.Annots();
-  if (annotsRef) {
-    annotsRef.push(linkAnnot);
-  } else {
-    pdfPage.node.set(PDFName.of('Annots'), pdfDoc.context.obj([linkAnnot]));
+  } catch (e) {
+    console.warn('⚠️ Watermark skipped:', e.message);
   }
 }
 
