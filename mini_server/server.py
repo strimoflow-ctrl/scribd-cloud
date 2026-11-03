@@ -47,6 +47,7 @@ KAGGLE_SLUG = os.environ.get("KAGGLE_SLUG", "scribd-cloud-worker").strip()
 KAGGLE_TITLE = os.environ.get("KAGGLE_TITLE", "Scribd High Speed Cloud Worker").strip()
 
 FORCE_SUB_CHANNEL = os.environ.get("FORCE_SUB_CHANNEL", "").strip()
+SERVER_START_TIME = time.time()
 
 if not BOT_TOKEN:
     print("⚠️ WARNING: BOT_TOKEN is not set! Please configure it in your .env or environment variables.")
@@ -327,17 +328,27 @@ def handle_incoming_message(msg):
 
 
 # -------------------------------------------------------------
-# HTTP Server for Render Health Checks & Webhooks
+# HTTP Server for Render Health Checks, Webhooks & Uptime Monitors
 # -------------------------------------------------------------
 class RenderHealthServer(BaseHTTPRequestHandler):
+    def do_HEAD(self):
+        """Supports HTTP HEAD requests from UptimeRobot / BetterUptime monitors."""
+        if self.path in ["/status", "/health", "/"]:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+        else:
+            self.send_error(404, "Not Found")
+
     def do_GET(self):
-        if self.path == "/health" or self.path == "/":
+        if self.path in ["/status", "/health", "/"]:
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             resp = {
                 "status": "online",
                 "service": "Scribd Cloud Mini-Server (Render Master)",
+                "uptime_seconds": int(time.time() - SERVER_START_TIME),
                 "timestamp": int(time.time())
             }
             self.wfile.write(json.dumps(resp).encode("utf-8"))
