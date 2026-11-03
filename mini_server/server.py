@@ -34,11 +34,20 @@ if sys.platform == "win32":
         pass
 
 # -------------------------------------------------------------
-# Configuration & Environment Variables (No hardcoded secrets)
+# Configuration & Environment Variables (Zero Plaintext Secrets)
 # -------------------------------------------------------------
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip().strip('"').strip("'")
+BOT_USERNAME = os.environ.get("BOT_USERNAME", "cryvex_uploader_bot").strip().strip('"').strip("'")
 FIREBASE_DB_URL = os.environ.get("FIREBASE_DB_URL", "").strip().strip('"').strip("'").rstrip("/")
 DB_ROOT = os.environ.get("DB_ROOT", "scribd_cloud").strip().strip('"').strip("'")
+
+# Admin Chat ID for Security & Restart Alerts
+ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", "7975542258").strip().strip('"').strip("'")
+
+# Master-Worker Authentication Key (Zero-Trust)
+WORKER_AUTH_KEY = os.environ.get("WORKER_AUTH_KEY", "scribd_sec_key_9921_xK9").strip().strip('"').strip("'")
+SERVER_URL = os.environ.get("SERVER_URL", "").strip().strip('"').strip("'").rstrip("/")
+RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL", "").strip().strip('"').strip("'").rstrip("/")
 
 # Kaggle API Credentials for Auto-Restart
 KAGGLE_USERNAME = os.environ.get("KAGGLE_USERNAME", "").strip().strip('"').strip("'")
@@ -47,7 +56,7 @@ KAGGLE_SLUG = os.environ.get("KAGGLE_SLUG", "scribd-cloud-worker").strip().strip
 KAGGLE_TITLE = os.environ.get("KAGGLE_TITLE", "Scribd High Speed Cloud Worker").strip().strip('"').strip("'")
 
 FORCE_SUB_CHANNEL = os.environ.get("FORCE_SUB_CHANNEL", "").strip().strip('"').strip("'")
-PROXY_URL = os.environ.get("PROXY_URL", "http://exgyempf:vmto3im799sb@45.38.107.97:6014").strip().strip('"').strip("'")
+PROXY_URL = os.environ.get("PROXY_URL", "").strip().strip('"').strip("'")
 SERVER_START_TIME = time.time()
 
 # In-Memory Real-Time Telemetry Counters
@@ -63,10 +72,29 @@ if not BOT_TOKEN:
 
 bot = telebot.TeleBot(BOT_TOKEN or "DUMMY_TOKEN_PLEASE_SET_ENV", parse_mode="Markdown")
 
-# -------------------------------------------------------------
-# Firebase REST Helpers (Ultra-Lightweight, Zero SDK Overhead)
-# -------------------------------------------------------------
 session = requests.Session()
+
+
+def send_admin_alert(event_title, message, alert_type="INFO"):
+    """Sends real-time security & status alerts to developer Telegram (7975542258)."""
+    if not ADMIN_CHAT_ID or not BOT_TOKEN:
+        return
+    icon = "🛡️" if alert_type == "SECURITY" else ("🟢" if alert_type == "SUCCESS" else ("⚠️" if alert_type == "WARNING" else "ℹ️"))
+    now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    text = (
+        f"{icon} *[SCRIBD CLOUD SYSTEM ALERT]*\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"⚡ *Event:* {event_title}\n"
+        f"🕒 *Time:* `{now_str}`\n"
+        f"📌 *Details:* {message}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🤖 *Cluster Master:* Render Node"
+    )
+    try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        session.post(url, json={"chat_id": ADMIN_CHAT_ID, "text": text, "parse_mode": "Markdown"}, timeout=5)
+    except Exception as e:
+        print(f"⚠️ [Admin Alert Error]: {e}")
 
 
 def fb_url(path):
@@ -122,15 +150,14 @@ def compile_worker_notebook_json():
         with open(cpath, "r", encoding="utf-8") as f:
             code = f.read()
 
-        # In cell2_config.py, dynamically inject the environment secrets from Render
+        # In cell2_config.py, inject ONLY the master URL & auth key (Zero-Trust In-Memory Handshake)
         if cf == "cell2_config.py":
+            master_url = SERVER_URL or RENDER_EXTERNAL_URL or ""
             inject_header = (
-                f'# Dynamically injected credentials from Render Coordinator\n'
+                f'# Zero-Trust In-Memory Runtime Authentication Handshake\n'
                 f'import os\n'
-                f'os.environ["FIREBASE_DB_URL"] = "{FIREBASE_DB_URL}"\n'
-                f'os.environ["DB_ROOT"] = "{DB_ROOT}"\n'
-                f'os.environ["BOT_TOKEN"] = "{BOT_TOKEN}"\n'
-                f'os.environ["PROXY_URL"] = "{PROXY_URL}"\n\n'
+                f'os.environ["SERVER_URL"] = "{master_url}"\n'
+                f'os.environ["WORKER_AUTH_KEY"] = "{WORKER_AUTH_KEY}"\n\n'
             )
             code = inject_header + code
 
@@ -175,13 +202,14 @@ def compile_worker_notebook_json():
 
 LAST_KAGGLE_TRIGGER_TIME = 0
 
-def trigger_kaggle_worker(force=False):
+def trigger_kaggle_worker(force=False, reason="Auto-Rotation"):
     """Pushes fresh notebook to Kaggle to start or rotate the 30GB compute session."""
     global LAST_KAGGLE_TRIGGER_TIME
 
     if not KAGGLE_USERNAME or not KAGGLE_KEY:
         err = "KAGGLE_USERNAME or KAGGLE_KEY is missing in Render Environment Variables!"
         print(f"❌ {err}")
+        send_admin_alert("Kaggle Launch Failed", "KAGGLE_USERNAME or KAGGLE_KEY is missing in Render Environment!", "WARNING")
         return False, err
 
     now = time.time()
@@ -219,6 +247,11 @@ def trigger_kaggle_worker(force=False):
 
         if resp.status_code in (200, 201):
             LAST_KAGGLE_TRIGGER_TIME = now
+            try:
+                session.put(fb_url("control/last_triggered_at"), json=int(now), timeout=5)
+            except Exception:
+                pass
+            send_admin_alert("Kaggle Worker Launched", f"New 30GB compute node started!\nReason: {reason}", "SUCCESS")
             return True, "Kaggle Worker launched successfully! 30GB node is booting."
         else:
             try:
@@ -226,10 +259,12 @@ def trigger_kaggle_worker(force=False):
                 msg = err_data.get("message") or err_data.get("error") or str(err_data)
             except Exception:
                 msg = resp.text[:200]
+            send_admin_alert("Kaggle Launch Rejected", f"Kaggle API [{resp.status_code}]: {msg}", "WARNING")
             return False, f"Kaggle API [{resp.status_code}]: {msg}"
 
     except Exception as e:
         print(f"❌ [Kaggle Push Failed] {e}")
+        send_admin_alert("Kaggle Launch Exception", str(e), "WARNING")
         return False, str(e)
 
 
@@ -248,7 +283,7 @@ def start_watchdog_thread():
                 if val is True:
                     print("⚡ [Auto-Restart] 11-hour handoff requested by Kaggle worker!")
                     session.put(fb_url("control/trigger_restart"), json=False, timeout=5)
-                    trigger_kaggle_worker(force=True)
+                    trigger_kaggle_worker(force=True, reason="11-Hour Zero-Downtime Session Handoff")
 
             # 2. Check worker heartbeat - only trigger if dead for > 15 mins AND pending tasks exist
             status_res = session.get(fb_url("worker/heartbeat"), timeout=5)
@@ -265,7 +300,7 @@ def start_watchdog_thread():
                         )
                         if has_pending:
                             print("⚠️ [Worker Offline] Pending tasks in queue and heartbeat expired! Triggering Kaggle worker...")
-                            trigger_kaggle_worker()
+                            trigger_kaggle_worker(force=False, reason="Crash Recovery (Dead Worker with Pending Queue)")
 
         except Exception as e:
             pass
@@ -970,13 +1005,93 @@ class RenderHealthServer(BaseHTTPRequestHandler):
             self.send_error(404, "Not Found")
 
     def do_POST(self):
-        # Endpoint to trigger Kaggle push remotely from the dashboard button
+        # 1. Endpoint to trigger Kaggle push remotely from dashboard
         if self.path == "/api/kaggle/restart":
-            ok, msg = trigger_kaggle_worker()
+            ok, msg = trigger_kaggle_worker(force=True, reason="Dashboard Button Action")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps({"success": ok, "message": msg, "error": msg if not ok else None}).encode("utf-8"))
+
+        # 2. In-Memory Runtime Handshake for Kaggle Worker
+        elif self.path == "/api/worker/handshake":
+            content_len = int(self.headers.get("Content-Length", 0))
+            post_body = self.rfile.read(content_len) if content_len > 0 else b"{}"
+            try:
+                body_data = json.loads(post_body.decode("utf-8"))
+            except Exception:
+                body_data = {}
+
+            req_auth = body_data.get("auth_key") or self.headers.get("X-Worker-Key") or ""
+            if req_auth and req_auth == WORKER_AUTH_KEY:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                payload = {
+                    "status": "ok",
+                    "bot_token": BOT_TOKEN,
+                    "firebase_db_url": FIREBASE_DB_URL,
+                    "db_root": DB_ROOT,
+                    "proxy_url": PROXY_URL,
+                    "bot_username": BOT_USERNAME
+                }
+                self.wfile.write(json.dumps(payload).encode("utf-8"))
+                send_admin_alert("Worker Handshake Verified", "Kaggle 30GB compute node authenticated! Credentials loaded strictly into memory.", "SUCCESS")
+            else:
+                self.send_response(401)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "error", "message": "Unauthorized: Invalid Worker Auth Key"}).encode("utf-8"))
+                send_admin_alert("Security Warning", "Blocked unauthorized worker handshake attempt!", "SECURITY")
+
+        # 3. Direct Heartbeat from Kaggle Worker
+        elif self.path == "/api/worker/heartbeat":
+            content_len = int(self.headers.get("Content-Length", 0))
+            post_body = self.rfile.read(content_len) if content_len > 0 else b"{}"
+            try:
+                hb_data = json.loads(post_body.decode("utf-8"))
+            except Exception:
+                hb_data = {}
+
+            req_auth = hb_data.get("auth_key") or self.headers.get("X-Worker-Key") or ""
+            if req_auth == WORKER_AUTH_KEY:
+                hb_data.pop("auth_key", None)
+                try:
+                    session.put(fb_url("worker/heartbeat"), json=hb_data, timeout=4)
+                except Exception:
+                    pass
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "ok"}).encode("utf-8"))
+            else:
+                self.send_response(401)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "error", "message": "Unauthorized"}).encode("utf-8"))
+
+        # 4. Direct Restart Request from Worker (11-Hour Mark)
+        elif self.path == "/api/worker/restart-request":
+            content_len = int(self.headers.get("Content-Length", 0))
+            post_body = self.rfile.read(content_len) if content_len > 0 else b"{}"
+            try:
+                req_data = json.loads(post_body.decode("utf-8"))
+            except Exception:
+                req_data = {}
+
+            req_auth = req_data.get("auth_key") or self.headers.get("X-Worker-Key") or ""
+            if req_auth == WORKER_AUTH_KEY:
+                ok, msg = trigger_kaggle_worker(force=True, reason="11-Hour Zero-Downtime Session Handoff (Direct API)")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "ok", "launched": ok, "message": msg}).encode("utf-8"))
+            else:
+                self.send_response(401)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "error", "message": "Unauthorized"}).encode("utf-8"))
+
         else:
             self.send_error(404, "Not Found")
 
@@ -997,6 +1112,8 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     # Start HTTP Health Server in background thread
     threading.Thread(target=run_http_server, args=(port,), daemon=True).start()
+
+    send_admin_alert("Render Master Online", "Mini-Server coordinator is live and actively monitoring Telegram & Kaggle cluster.", "SUCCESS")
 
     print("🤖 [Telegram Bot] Polling started on Mini-Server...")
     try:

@@ -485,12 +485,32 @@ def heartbeat_loop():
                 "uptime_hours": round(uptime / 3600.0, 2),
                 "ram_mb": 30000  # Kaggle provides 30GB RAM
             }
+
+            # 1. Direct Heartbeat to Render Master (Zero-Trust)
+            if SERVER_URL:
+                try:
+                    payload = dict(heartbeat_data)
+                    payload["auth_key"] = WORKER_AUTH_KEY
+                    requests.post(f"{SERVER_URL}/api/worker/heartbeat", json=payload, timeout=5)
+                except Exception:
+                    pass
+
+            # 2. Sync to Firebase RTDB
             fb_put("worker/heartbeat", heartbeat_data)
 
             # ── 11-Hour Zero-Downtime Session Handoff Check ──
             if uptime >= MAX_RUNTIME_SECONDS:
                 if active_count == 0:
                     print("⏰ [11-Hour Reached] No active rendering jobs! Initiating zero-downtime handoff...")
+                    if SERVER_URL:
+                        try:
+                            requests.post(
+                                f"{SERVER_URL}/api/worker/restart-request",
+                                json={"auth_key": WORKER_AUTH_KEY, "reason": "11-Hour Session Handoff"},
+                                timeout=5
+                            )
+                        except Exception:
+                            pass
                     fb_put("control/trigger_restart", True)
                     time.sleep(10)
                     STOP_REQUESTED = True
