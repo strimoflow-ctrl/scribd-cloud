@@ -64,7 +64,7 @@ function addClickableWatermark(pdfDoc, pdfPage, font, botUsername = 'cryvex_uplo
   }
 }
 
-async function renderScribdDocument(docId, rawOutputPath, startPage = 1, endPage = null, proxyUrl = null) {
+async function renderScribdDocument(docId, rawOutputPath, startPage = 1, endPage = null, proxyUrl = null, preferredTitle = null) {
   const docUrl = `https://www.scribd.com/embeds/${docId}/content?start_page=${startPage}&view_mode=scroll&access_key=key-f2qib7rwhbehpnMSdt`;
 
   let proxyServerArg = '';
@@ -156,19 +156,34 @@ async function renderScribdDocument(docId, rawOutputPath, startPage = 1, endPage
 
     // Real document title detection
     let docTitle = await page.evaluate(() => {
+      if (window.Scribd && window.Scribd.current_doc && window.Scribd.current_doc.title) {
+        const st = window.Scribd.current_doc.title.replace(/Scribd/i, '').trim();
+        if (st && !st.toLowerCase().includes('client challenge')) return st;
+      }
+      if (window.docManager && window.docManager.doc_title) {
+        const dt = window.docManager.doc_title.replace(/Scribd/i, '').trim();
+        if (dt && !dt.toLowerCase().includes('client challenge')) return dt;
+      }
       const ogTitle = document.querySelector('meta[property="og:title"]');
       if (ogTitle && ogTitle.content && !ogTitle.content.toLowerCase().includes('client challenge')) {
-        return ogTitle.content.replace(/Scribd/i, '').trim();
+        return ogTitle.content.replace(/Scribd/i, '').replace(/[-|]\s*Scribd.*$/i, '').trim();
       }
-      const titleEl = document.querySelector('.document_title') || document.querySelector('h1') || document.querySelector('title');
+      const titleEl = document.querySelector('.document_title') || document.querySelector('h1') || document.querySelector('.title');
       if (titleEl && titleEl.textContent) {
         const t = titleEl.textContent.replace(/Scribd/i, '').trim();
         if (!t.toLowerCase().includes('client challenge') && !t.toLowerCase().includes('just a moment')) {
           return t;
         }
       }
+      if (document.title && !document.title.toLowerCase().includes('client challenge') && !document.title.toLowerCase().includes('just a moment')) {
+        return document.title.replace(/[-|]\s*Scribd.*$/i, '').trim();
+      }
       return '';
     });
+
+    if (!docTitle && preferredTitle && !preferredTitle.toLowerCase().includes('client challenge') && !preferredTitle.toLowerCase().includes('doc #')) {
+      docTitle = preferredTitle;
+    }
     if (!docTitle) docTitle = `Scribd_Doc_${docId}`;
 
     // Total pages detection
@@ -351,13 +366,13 @@ async function renderScribdDocument(docId, rawOutputPath, startPage = 1, endPage
 
 // CLI Execution Entry Point
 if (require.main === module) {
-  const [,, docId, outputPath, startPage, endPage, proxyUrl] = process.argv;
+  const [,, docId, outputPath, startPage, endPage, proxyUrl, preferredTitle] = process.argv;
   if (!docId || !outputPath) {
-    console.error(JSON.stringify({ success: false, error: 'Usage: node downloader.js <docId> <outputPath> [start] [end] [proxy]' }));
+    console.error(JSON.stringify({ success: false, error: 'Usage: node downloader.js <docId> <outputPath> [start] [end] [proxy] [preferredTitle]' }));
     process.exit(1);
   }
 
-  renderScribdDocument(docId, outputPath, startPage || 1, endPage || null, proxyUrl || null)
+  renderScribdDocument(docId, outputPath, startPage || 1, endPage || null, proxyUrl || null, preferredTitle || null)
     .then(res => {
       console.log('__FINAL_RESULT__' + JSON.stringify(res));
       process.exit(0);

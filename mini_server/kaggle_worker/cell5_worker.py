@@ -6,6 +6,8 @@ import sys
 import time
 import json
 import math
+import re
+import shutil
 import subprocess
 import threading
 import concurrent.futures
@@ -40,6 +42,24 @@ def get_file_size_mb(filepath):
     except Exception:
         pass
     return 0.0
+
+
+def sanitize_filename(title, doc_id):
+    """Generates a clean, professional PDF filename from the real document title."""
+    clean_name = title or ""
+    clean_name = re.sub(r'^(?:Scribd_Doc_|Doc\s*#?)\d+\s*', '', clean_name, flags=re.I).strip()
+    if not clean_name or "client challenge" in clean_name.lower():
+        clean_name = f"Scribd_{doc_id}"
+    else:
+        # Remove invalid filesystem characters
+        clean_name = re.sub(r'[/\\?%*:|"<>~`!@#$^&=+;,]', '', clean_name)
+        clean_name = re.sub(r'\s+', '_', clean_name.strip())
+        clean_name = re.sub(r'_+', '_', clean_name).strip('_-')
+        clean_name = clean_name[:65]
+        if not clean_name:
+            clean_name = f"Scribd_{doc_id}"
+    return f"{clean_name}.pdf"
+
 
 print("🚀 [CELL 5] Initializing High-Performance Kaggle Worker Loop...")
 
@@ -236,7 +256,7 @@ def send_telegram_doc(chat_id, pdf_path, caption, reply_markup=None):
     return None
 
 
-def execute_downloader_process(doc_id, output_path, start_page=1, end_page=None, on_progress=None):
+def execute_downloader_process(doc_id, output_path, start_page=1, end_page=None, preferred_title="", on_progress=None):
     """Invokes Node Puppeteer downloader with real-time stdout streaming and DOM pruning."""
     downloader_script = os.path.join(WORKING_DIR, "downloader.js")
     if not os.path.exists(downloader_script):
@@ -252,7 +272,8 @@ def execute_downloader_process(doc_id, output_path, start_page=1, end_page=None,
         output_path,
         str(start_page),
         str(end_page or ""),
-        PROXY_URL or ""
+        PROXY_URL or "",
+        preferred_title or ""
     ]
 
     print(f"▶️ Launching: {' '.join(cmd)}")
@@ -344,13 +365,22 @@ def process_single_task(task_id, task_data):
             text = prog.get("text", "")
             tracker.update(stage, pct, text)
 
+        task_title = task_data.get("title", "")
+
         # Step 1: Render via Puppeteer with Real-time Progress
-        render_res = execute_downloader_process(doc_id, raw_pdf_path, on_progress=on_render_progress)
-        title = render_res.get("title", f"Scribd Document {doc_id}")
+        render_res = execute_downloader_process(doc_id, raw_pdf_path, preferred_title=task_title, on_progress=on_render_progress)
+        detected_title = render_res.get("title", "")
+        if detected_title and "client challenge" not in detected_title.lower() and not detected_title.startswith("Scribd_Doc_"):
+            title = detected_title
+        elif task_title and not task_title.startswith("Doc #"):
+            title = task_title
+        else:
+            title = f"Scribd Document {doc_id}"
+
         page_count = render_res.get("pageCount", "Full")
         raw_size = get_file_size_mb(raw_pdf_path)
 
-        print(f"✅ Rendered raw PDF for {doc_id}: {page_count} pages, {raw_size} MB")
+        print(f"✅ Rendered raw PDF for {doc_id} ('{title}'): {page_count} pages, {raw_size} MB")
 
         if not page_count or page_count == 0 or raw_size < 0.01:
             raise RuntimeError("Rendered PDF contains 0 pages (Cloudflare Challenge Blocked). Please check residential proxy.")
@@ -365,11 +395,26 @@ def process_single_task(task_id, task_data):
 
         total_elapsed = round(time.time() - tracker.start_time, 1)
 
-        # Step 3: Direct Telegram vs High-Speed Cloud Link (No multi-parts!)
+        # ── Step 3: Professional File Naming (Matches Real Book Title) ──
+        clean_filename = sanitize_filename(title, doc_id)
+        named_pdf_path = os.path.join(DOWNLOAD_DIR, clean_filename)
+        try:
+            if os.path.exists(named_pdf_path) and named_pdf_path != final_pdf_path:
+                try:
+                    os.unlink(named_pdf_path)
+                except Exception:
+                    pass
+            shutil.copyfile(final_pdf_path, named_pdf_path)
+            delivery_path = named_pdf_path
+        except Exception as copy_err:
+            print(f"⚠️ Renaming notice: {copy_err}")
+            delivery_path = final_pdf_path
+
+        # Step 4: Direct Telegram vs High-Speed Cloud Link
         if final_size > 49.0:
             tracker.update("uploading", 95, f"Uploading Ultra HD PDF to Cloud ({final_size} MB)...", force=True)
             print(f"📦 Large Document ({final_size} MB) > 49MB: Uploading single Ultra HD PDF to Cloud...")
-            download_url = upload_to_temp_cloud(final_pdf_path)
+            download_url = upload_to_temp_cloud(delivery_path)
             if not download_url:
                 raise RuntimeError("Temporary cloud upload failed.")
 
@@ -419,7 +464,7 @@ def process_single_task(task_id, task_data):
                 f"👨‍💻 *Developer:* @cryvex4"
             )
 
-            file_id = send_telegram_doc(chat_id, final_pdf_path, caption)
+            file_id = send_telegram_doc(chat_id, delivery_path, caption)
 
             # Delete progress status message
             tracker.delete()
