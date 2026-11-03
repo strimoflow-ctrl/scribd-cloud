@@ -47,6 +47,7 @@ KAGGLE_SLUG = os.environ.get("KAGGLE_SLUG", "scribd-cloud-worker").strip()
 KAGGLE_TITLE = os.environ.get("KAGGLE_TITLE", "Scribd High Speed Cloud Worker").strip()
 
 FORCE_SUB_CHANNEL = os.environ.get("FORCE_SUB_CHANNEL", "").strip()
+PROXY_URL = os.environ.get("PROXY_URL", "").strip()
 SERVER_START_TIME = time.time()
 
 # In-Memory Real-Time Telemetry Counters
@@ -95,10 +96,14 @@ def push_queue_task(task_id, data):
 # Kaggle Notebook Pusher (Spawns 30GB Cloud Worker via REST API)
 # -------------------------------------------------------------
 def compile_worker_notebook_json():
-    """Compiles local kaggle_worker cells into a complete Jupyter Notebook JSON."""
+    """Compiles local kaggle_worker cells into a complete Jupyter Notebook JSON, injecting credentials dynamically."""
     cells = []
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    worker_dir = os.path.join(os.path.dirname(base_dir), "kaggle_worker")
+    
+    # Check both current directory and parent directory for kaggle_worker folder
+    worker_dir = os.path.join(base_dir, "kaggle_worker")
+    if not os.path.exists(worker_dir):
+        worker_dir = os.path.join(os.path.dirname(base_dir), "kaggle_worker")
 
     cell_files = [
         "cell1_setup.py",
@@ -111,10 +116,23 @@ def compile_worker_notebook_json():
     for cf in cell_files:
         cpath = os.path.join(worker_dir, cf)
         if not os.path.exists(cpath):
+            print(f"⚠️ Cell file not found at: {cpath}")
             continue
 
         with open(cpath, "r", encoding="utf-8") as f:
             code = f.read()
+
+        # In cell2_config.py, dynamically inject the environment secrets from Render
+        if cf == "cell2_config.py":
+            inject_header = (
+                f'# Dynamically injected credentials from Render Coordinator\n'
+                f'import os\n'
+                f'os.environ["FIREBASE_DB_URL"] = "{FIREBASE_DB_URL}"\n'
+                f'os.environ["DB_ROOT"] = "{DB_ROOT}"\n'
+                f'os.environ["BOT_TOKEN"] = "{BOT_TOKEN}"\n'
+                f'os.environ["PROXY_URL"] = "{PROXY_URL}"\n\n'
+            )
+            code = inject_header + code
 
         # If it's the JS downloader, safely encode to base64 so no string escape issues occur
         if cf.endswith(".js"):
@@ -137,6 +155,9 @@ def compile_worker_notebook_json():
             "source": lines
         })
 
+    if not cells:
+        raise ValueError(f"No cell files found in '{worker_dir}'. Ensure kaggle_worker folder is present.")
+
     notebook = {
         "cells": cells,
         "metadata": {
@@ -154,8 +175,13 @@ def compile_worker_notebook_json():
 
 def trigger_kaggle_worker():
     """Pushes fresh notebook to Kaggle to start or rotate the 30GB compute session."""
+    if not KAGGLE_USERNAME or not KAGGLE_KEY:
+        err = "KAGGLE_USERNAME or KAGGLE_KEY is missing in Render Environment Variables!"
+        print(f"❌ {err}")
+        return False, err
+
     try:
-        print("🚀 [Kaggle Orchestrator] Compiling and pushing notebook to Kaggle REST API...")
+        print(f"🚀 [Kaggle Orchestrator] Compiling notebook for user '{KAGGLE_USERNAME}' slug '{KAGGLE_SLUG}'...")
         notebook_json = compile_worker_notebook_json()
         creds = base64.b64encode(f"{KAGGLE_USERNAME}:{KAGGLE_KEY}".encode()).decode()
         headers = {
@@ -178,11 +204,21 @@ def trigger_kaggle_worker():
         }
         url = "https://www.kaggle.com/api/v1/kernels/push"
         resp = session.post(url, headers=headers, json=payload, timeout=30)
-        print(f"✅ [Kaggle Push Response] Status: {resp.status_code} | Body: {resp.text[:150]}")
-        return resp.status_code in (200, 201)
+        print(f"📋 [Kaggle Push Response] Status: {resp.status_code} | Body: {resp.text}")
+
+        if resp.status_code in (200, 201):
+            return True, "Kaggle Worker launched successfully! 30GB node is booting."
+        else:
+            try:
+                err_data = resp.json()
+                msg = err_data.get("message") or err_data.get("error") or str(err_data)
+            except Exception:
+                msg = resp.text[:200]
+            return False, f"Kaggle API [{resp.status_code}]: {msg}"
+
     except Exception as e:
         print(f"❌ [Kaggle Push Failed] {e}")
-        return False
+        return False, str(e)
 
 
 # -------------------------------------------------------------
@@ -714,10 +750,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         const data = await res.json();
         if (data.success) {
           alertBox.className = 'alert-box alert-success';
-          alertBox.innerText = '✅ Kaggle Worker Started! 30GB compute session initialized.';
+          alertBox.innerText = '✅ ' + (data.message || 'Kaggle Worker Started! 30GB compute session initialized.');
         } else {
           alertBox.className = 'alert-box alert-error';
-          alertBox.innerText = '❌ Failed to start: ' + (data.error || 'Check Kaggle credentials in Render environment');
+          alertBox.innerText = '❌ Failed: ' + (data.error || 'Check Kaggle credentials in Render environment');
         }
       } catch (err) {
         alertBox.className = 'alert-box alert-error';
@@ -787,13 +823,12 @@ class RenderHealthServer(BaseHTTPRequestHandler):
     def do_POST(self):
         # Endpoint to trigger Kaggle push remotely from the dashboard button
         if self.path == "/api/kaggle/restart":
-            ok = trigger_kaggle_worker()
+            ok, msg = trigger_kaggle_worker()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(json.dumps({"success": ok}).encode("utf-8"))
+            self.wfile.write(json.dumps({"success": ok, "message": msg, "error": msg if not ok else None}).encode("utf-8"))
         else:
-            self.send_error(404, "Not Found")
             self.send_error(404, "Not Found")
 
     def log_message(self, format, *args):
