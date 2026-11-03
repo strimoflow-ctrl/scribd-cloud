@@ -155,13 +155,11 @@ def send_telegram_button(chat_id, text, download_url, btn_text):
         "chat_id": chat_id,
         "text": text,
         "parse_mode": "Markdown",
+        "disable_web_page_preview": True,
         "reply_markup": {
             "inline_keyboard": [
                 [
                     {"text": btn_text, "url": download_url}
-                ],
-                [
-                    {"text": "💬 Support (@cryvex4)", "url": "https://t.me/cryvex4"}
                 ]
             ]
         }
@@ -382,9 +380,8 @@ def process_single_task(task_id, task_data):
                 f"📦 *File Size:* {final_size} MB (Ultra HD 100% Original Quality)\n"
                 f"⚡ *Speed:* {total_elapsed}s\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"🚀 *Your Document is ready for 1-Click High-Speed Download!*\n\n"
-                f"👉 [Click Here to Download Full PDF]({download_url})\n\n"
-                f"⏰ _Note: High-speed direct link is active for 24-48 hours._\n"
+                f"🚀 *Your Document is ready for High-Speed Download!*\n"
+                f"⏰ _Note: Link active for 24-48 hours._\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"🤖 *Downloaded via:* @cryvex_uploader_bot\n"
                 f"👨‍💻 *Developer:* @cryvex4"
@@ -418,15 +415,8 @@ def process_single_task(task_id, task_data):
                 f"🤖 *Downloaded via:* @cryvex_uploader_bot\n"
                 f"👨‍💻 *Developer:* @cryvex4"
             )
-            reply_markup = {
-                "inline_keyboard": [
-                    [
-                        {"text": "💬 Support (@cryvex4)", "url": "https://t.me/cryvex4"}
-                    ]
-                ]
-            }
 
-            file_id = send_telegram_doc(chat_id, final_pdf_path, caption, reply_markup=reply_markup)
+            file_id = send_telegram_doc(chat_id, final_pdf_path, caption)
 
             # Delete progress status message
             tracker.delete()

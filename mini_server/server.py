@@ -314,7 +314,7 @@ def send_join_prompt(chat_id, doc_id=None, url_slug=None):
 
 
 def send_welcome_message(chat_id, first_name="Dost"):
-    """Sends official welcome screen with key features & support button (L858-L869)."""
+    """Sends official welcome screen with key features (L858-L869)."""
     welcome_text = (
         f"🌟 *WELCOME TO SCRIBD HD DOWNLOADER*\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -328,14 +328,11 @@ def send_welcome_message(chat_id, first_name="Dost"):
         f"━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"👨‍💻 *Made with ❤️ by* @cryvex4"
     )
-    markup = telebot.types.InlineKeyboardMarkup()
-    buttons = [
-        telebot.types.InlineKeyboardButton("💬 Support (@cryvex4)", url="https://t.me/cryvex4")
-    ]
+    markup = None
     if FORCE_SUB_CHANNEL:
         clean_channel = FORCE_SUB_CHANNEL.replace("@", "").strip()
-        buttons.append(telebot.types.InlineKeyboardButton("📢 Channel", url=f"https://t.me/{clean_channel}"))
-    markup.row(*buttons)
+        markup = telebot.types.InlineKeyboardMarkup()
+        markup.add(telebot.types.InlineKeyboardButton("📢 Official Channel", url=f"https://t.me/{clean_channel}"))
 
     bot.send_message(chat_id, welcome_text, reply_markup=markup, parse_mode="Markdown", disable_web_page_preview=True)
 
@@ -413,8 +410,6 @@ def dispatch_scribd_task(chat_id, user_id, username, doc_id, url_slug=None):
         pages = cached.get("totalPages", "Full")
         if cached.get("file_id"):
             STATS["cache_hits"] += 1
-            markup = telebot.types.InlineKeyboardMarkup()
-            markup.add(telebot.types.InlineKeyboardButton("💬 Support (@cryvex4)", url="https://t.me/cryvex4"))
             bot.send_document(
                 chat_id,
                 cached["file_id"],
@@ -427,31 +422,33 @@ def dispatch_scribd_task(chat_id, user_id, username, doc_id, url_slug=None):
                     f"━━━━━━━━━━━━━━━━━━━━━━\n"
                     f"🤖 *Downloaded via:* @cryvex_uploader_bot\n"
                     f"👨‍💻 *Developer:* @cryvex4"
-                ),
-                reply_markup=markup
+                )
             )
             return
         elif cached.get("download_url"):
             STATS["cache_hits"] += 1
             f_size = cached.get("fileSizeMb", "Ultra HD")
             markup = telebot.types.InlineKeyboardMarkup()
-            markup.row(telebot.types.InlineKeyboardButton(f"🚀 Download Full PDF ({f_size} MB)", url=cached["download_url"]))
-            markup.row(telebot.types.InlineKeyboardButton("💬 Support (@cryvex4)", url="https://t.me/cryvex4"))
-            bot.send_message(
-                chat_id,
+            markup.add(telebot.types.InlineKeyboardButton(f"🚀 Download Full Ultra HD PDF ({f_size} MB)", url=cached["download_url"]))
+            msg_text = (
                 f"📚 *{title}*\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"📑 *Pages:* {pages}\n"
-                f"📦 *File Size:* {f_size} MB (Ultra HD 100% Quality)\n"
-                f"⚡ *Delivered Instantly via High-Speed Cloud Cache!* (0.2s)\n"
+                f"📦 *File Size:* {f_size} MB (Ultra HD 100% Original Quality)\n"
+                f"⚡ *Speed:* 0.2s (Instant Cloud Cache)\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"🚀 *Your Document is ready for 1-Click High-Speed Download!*\n\n"
-                f"👉 [Click Here to Download Full PDF]({cached['download_url']})\n\n"
-                f"⏰ _Note: High-speed direct link is active for 24-48 hours._\n"
+                f"🚀 *Your Document is ready for High-Speed Download!*\n"
+                f"⏰ _Note: Link active for 24-48 hours._\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"🤖 *Downloaded via:* @cryvex_uploader_bot\n"
-                f"👨‍💻 *Developer:* @cryvex4",
-                reply_markup=markup
+                f"👨‍💻 *Developer:* @cryvex4"
+            )
+            bot.send_message(
+                chat_id,
+                msg_text,
+                reply_markup=markup,
+                parse_mode="Markdown",
+                disable_web_page_preview=True
             )
             return
 
