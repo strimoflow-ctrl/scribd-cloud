@@ -32,6 +32,14 @@ try:
 except ImportError:
     pass
 
+def get_file_size_mb(filepath):
+    try:
+        if os.path.exists(filepath):
+            return round(os.path.getsize(filepath) / (1024 * 1024), 2)
+    except Exception:
+        pass
+    return 0.0
+
 print("🚀 [CELL 5] Initializing High-Performance Kaggle Worker Loop...")
 
 # In-memory registry of tasks currently being rendered

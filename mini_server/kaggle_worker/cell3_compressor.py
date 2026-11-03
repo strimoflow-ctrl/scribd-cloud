@@ -4,7 +4,16 @@
 import os
 import subprocess
 
-def compress_pdf_lossless(input_path, output_path=None, quality_preset="ebook"):
+def get_file_size_mb(filepath):
+    """Returns size of a file in megabytes, rounded to 2 decimals."""
+    try:
+        if os.path.exists(filepath):
+            return round(os.path.getsize(filepath) / (1024 * 1024), 2)
+    except Exception:
+        pass
+    return 0.0
+
+def compress_pdf_lossless(input_path, output_path=None, preset="ebook"):
     """
     Compresses PDF using Ghostscript (Same industrial engine used by ILovePDF).
     Preserves 100% crisp text readability while shrinking image payloads by up to 80%.
@@ -15,19 +24,28 @@ def compress_pdf_lossless(input_path, output_path=None, quality_preset="ebook"):
     - 'printer': 300 DPI (High quality print grade)
     """
     if not os.path.exists(input_path):
-        return {"success": False, "error": "Input file not found"}
+        return {
+            "success": False,
+            "final_path": input_path,
+            "original_mb": 0.0,
+            "final_size_mb": 0.0,
+            "reduction_pct": 0,
+            "error": "Input file not found"
+        }
 
     if output_path is None:
         output_path = input_path.replace(".pdf", "_compressed.pdf")
 
-    orig_bytes = os.path.getsize(input_path)
-    orig_mb = round(orig_bytes / (1024 * 1024), 2)
+    # Clean preset format (strip leading slash if provided)
+    clean_preset = str(preset).lstrip("/")
+
+    orig_mb = get_file_size_mb(input_path)
 
     gs_cmd = [
         "gs",
         "-sDEVICE=pdfwrite",
         "-dCompatibilityLevel=1.4",
-        f"-dPDFSETTINGS=/{quality_preset}",
+        f"-dPDFSETTINGS=/{clean_preset}",
         "-dColorImageResolution=150",
         "-dGrayImageResolution=150",
         "-dMonoImageResolution=150",
@@ -43,23 +61,24 @@ def compress_pdf_lossless(input_path, output_path=None, quality_preset="ebook"):
     ]
 
     try:
-        print(f"🗜️ [ILovePDF Compressor] Compressing '{os.path.basename(input_path)}' ({orig_mb} MB)...")
+        print(f"🗜️ [ILovePDF Compressor] Compressing '{os.path.basename(input_path)}' ({orig_mb} MB) with /{clean_preset}...")
         subprocess.check_call(gs_cmd)
 
         if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+            comp_mb = get_file_size_mb(output_path)
+            orig_bytes = os.path.getsize(input_path)
             comp_bytes = os.path.getsize(output_path)
-            comp_mb = round(comp_bytes / (1024 * 1024), 2)
-            saved_pct = round(((orig_bytes - comp_bytes) / orig_bytes) * 100, 1)
+            reduction_pct = round(((orig_bytes - comp_bytes) / orig_bytes) * 100, 1) if orig_bytes > 0 else 0
 
             # If compression resulted in a smaller file, accept it
             if comp_bytes < orig_bytes:
-                print(f"✅ [Compression Success] {orig_mb} MB ──► {comp_mb} MB (Saved: {saved_pct}%)")
+                print(f"✅ [Compression Success] {orig_mb} MB ──► {comp_mb} MB (Saved: {reduction_pct}%)")
                 return {
                     "success": True,
-                    "path": output_path,
+                    "final_path": output_path,
                     "original_mb": orig_mb,
-                    "compressed_mb": comp_mb,
-                    "saved_percent": saved_pct
+                    "final_size_mb": comp_mb,
+                    "reduction_pct": reduction_pct
                 }
             else:
                 # If already well-compressed, keep original
@@ -68,10 +87,10 @@ def compress_pdf_lossless(input_path, output_path=None, quality_preset="ebook"):
                 except Exception: pass
                 return {
                     "success": True,
-                    "path": input_path,
+                    "final_path": input_path,
                     "original_mb": orig_mb,
-                    "compressed_mb": orig_mb,
-                    "saved_percent": 0
+                    "final_size_mb": orig_mb,
+                    "reduction_pct": 0
                 }
 
     except Exception as e:
@@ -79,11 +98,10 @@ def compress_pdf_lossless(input_path, output_path=None, quality_preset="ebook"):
 
     return {
         "success": True,
-        "path": input_path,
+        "final_path": input_path,
         "original_mb": orig_mb,
-        "compressed_mb": orig_mb,
-        "saved_percent": 0
+        "final_size_mb": orig_mb,
+        "reduction_pct": 0
     }
 
 print("✅ [CELL 3 Complete] Lossless Ghostscript Compression Engine Ready!")
-
