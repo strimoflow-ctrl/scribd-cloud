@@ -36,18 +36,18 @@ if sys.platform == "win32":
 # -------------------------------------------------------------
 # Configuration & Environment Variables (No hardcoded secrets)
 # -------------------------------------------------------------
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
-FIREBASE_DB_URL = os.environ.get("FIREBASE_DB_URL", "").strip().rstrip("/")
-DB_ROOT = os.environ.get("DB_ROOT", "scribd_cloud").strip()
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip().strip('"').strip("'")
+FIREBASE_DB_URL = os.environ.get("FIREBASE_DB_URL", "").strip().strip('"').strip("'").rstrip("/")
+DB_ROOT = os.environ.get("DB_ROOT", "scribd_cloud").strip().strip('"').strip("'")
 
 # Kaggle API Credentials for Auto-Restart
-KAGGLE_USERNAME = os.environ.get("KAGGLE_USERNAME", "").strip()
-KAGGLE_KEY = os.environ.get("KAGGLE_KEY", "").strip()
-KAGGLE_SLUG = os.environ.get("KAGGLE_SLUG", "scribd-cloud-worker").strip()
-KAGGLE_TITLE = os.environ.get("KAGGLE_TITLE", "Scribd High Speed Cloud Worker").strip()
+KAGGLE_USERNAME = os.environ.get("KAGGLE_USERNAME", "").strip().strip('"').strip("'")
+KAGGLE_KEY = os.environ.get("KAGGLE_KEY", "").strip().strip('"').strip("'")
+KAGGLE_SLUG = os.environ.get("KAGGLE_SLUG", "scribd-cloud-worker").strip().strip('"').strip("'")
+KAGGLE_TITLE = os.environ.get("KAGGLE_TITLE", "Scribd High Speed Cloud Worker").strip().strip('"').strip("'")
 
-FORCE_SUB_CHANNEL = os.environ.get("FORCE_SUB_CHANNEL", "").strip()
-PROXY_URL = os.environ.get("PROXY_URL", "").strip()
+FORCE_SUB_CHANNEL = os.environ.get("FORCE_SUB_CHANNEL", "").strip().strip('"').strip("'")
+PROXY_URL = os.environ.get("PROXY_URL", "").strip().strip('"').strip("'")
 SERVER_START_TIME = time.time()
 
 # In-Memory Real-Time Telemetry Counters
@@ -380,6 +380,17 @@ def handle_incoming_message(msg):
 # -------------------------------------------------------------
 # Live Stats & Responsive HTML Dashboard
 # -------------------------------------------------------------
+def get_worker_heartbeat():
+    """Fetches the latest heartbeat from Firebase."""
+    try:
+        r = session.get(fb_url("worker/heartbeat"), timeout=3)
+        if r.ok and r.json():
+            return r.json()
+    except Exception:
+        pass
+    return None
+
+
 def get_live_stats():
     """Fetches real-time status from Firebase and in-memory counters."""
     heartbeat = get_worker_heartbeat() or {}
