@@ -49,6 +49,14 @@ KAGGLE_TITLE = os.environ.get("KAGGLE_TITLE", "Scribd High Speed Cloud Worker").
 FORCE_SUB_CHANNEL = os.environ.get("FORCE_SUB_CHANNEL", "").strip()
 SERVER_START_TIME = time.time()
 
+# In-Memory Real-Time Telemetry Counters
+STATS = {
+    "total_requests": 0,
+    "cache_hits": 0,
+    "queue_tasks": 0,
+    "unique_users": set()
+}
+
 if not BOT_TOKEN:
     print("⚠️ WARNING: BOT_TOKEN is not set! Please configure it in your .env or environment variables.")
 
@@ -278,9 +286,14 @@ def handle_incoming_message(msg):
     user_id = msg.from_user.id
     username = msg.from_user.username or msg.from_user.first_name or "User"
 
+    # Track Telemetry
+    STATS["total_requests"] += 1
+    STATS["unique_users"].add(user_id)
+
     # 1. ⚡ SMART CACHE CHECK (0.2s Instant Delivery)
     cached = get_cached_doc(doc_id)
     if cached and cached.get("file_id"):
+        STATS["cache_hits"] += 1
         title = cached.get("title", "Scribd Document")
         pages = cached.get("totalPages", "Full")
         bot.send_document(
@@ -312,6 +325,7 @@ def handle_incoming_message(msg):
 
     ok = push_queue_task(task_id, task_payload)
     if ok:
+        STATS["queue_tasks"] += 1
         bot.send_message(
             chat_id,
             f"⚡ *CLOUD TASK INITIALIZED*\n"
@@ -328,20 +342,427 @@ def handle_incoming_message(msg):
 
 
 # -------------------------------------------------------------
+# Live Stats & Responsive HTML Dashboard
+# -------------------------------------------------------------
+def get_live_stats():
+    """Fetches real-time status from Firebase and in-memory counters."""
+    heartbeat = get_worker_heartbeat() or {}
+    last_seen = heartbeat.get("timestamp", 0)
+    is_worker_online = (time.time() - last_seen) < 90 if last_seen else False
+
+    # Get cached count
+    cache_count = 0
+    try:
+        r = session.get(fb_url("cache"), timeout=3)
+        if r.ok and isinstance(r.json(), dict):
+            cache_count = len(r.json())
+    except Exception:
+        pass
+
+    # Get pending queue count
+    queue_count = 0
+    try:
+        r = session.get(fb_url("queue"), timeout=3)
+        if r.ok and isinstance(r.json(), dict):
+            queue_count = len(r.json())
+    except Exception:
+        pass
+
+    return {
+        "server_status": "online",
+        "server_uptime_seconds": int(time.time() - SERVER_START_TIME),
+        "total_requests": STATS["total_requests"],
+        "unique_users": len(STATS["unique_users"]),
+        "cache_hits": STATS["cache_hits"],
+        "queue_tasks": STATS["queue_tasks"],
+        "total_cached_docs": cache_count,
+        "pending_queue": queue_count,
+        "worker": {
+            "online": is_worker_online,
+            "status": heartbeat.get("status", "offline") if is_worker_online else "offline",
+            "active_jobs": heartbeat.get("active_jobs", 0) if is_worker_online else 0,
+            "uptime_hours": heartbeat.get("uptime_hours", 0) if is_worker_online else 0,
+            "last_seen_sec_ago": int(time.time() - last_seen) if last_seen else -1
+        }
+    }
+
+
+DASHBOARD_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <title>Scribd Cloud Supercluster</title>
+  <style>
+    :root {
+      --bg: #090d16;
+      --card: #131b2e;
+      --card-border: #1e293b;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --primary: #3b82f6;
+      --primary-hover: #2563eb;
+      --success: #10b981;
+      --danger: #ef4444;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text-main);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      padding: 16px;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+    }
+    .container {
+      width: 100%;
+      max-width: 480px;
+      margin-top: 4px;
+    }
+    .header {
+      background: var(--card);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 14px 18px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 14px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .brand-icon {
+      font-size: 20px;
+      background: rgba(59, 130, 246, 0.15);
+      padding: 6px 10px;
+      border-radius: 10px;
+    }
+    .brand-text h1 {
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: -0.3px;
+    }
+    .brand-text p {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+    .badge-live {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 4px 10px;
+      border-radius: 20px;
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--success);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+    .pulse-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--success);
+      box-shadow: 0 0 8px var(--success);
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.9); }
+      100% { opacity: 1; transform: scale(1); }
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--card-border);
+      border-radius: 14px;
+      padding: 14px;
+    }
+    .card-title {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+    }
+    .card-val {
+      font-size: 22px;
+      font-weight: 800;
+      color: #fff;
+    }
+    .card-sub {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+    .panel {
+      background: var(--card);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 16px;
+      margin-bottom: 14px;
+    }
+    .panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--card-border);
+    }
+    .panel-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: #cbd5e1;
+    }
+    .status-pill {
+      font-size: 11px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 6px;
+    }
+    .status-online { background: rgba(16, 185, 129, 0.15); color: var(--success); }
+    .status-offline { background: rgba(239, 68, 68, 0.15); color: var(--danger); }
+    .info-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 13px;
+      padding: 6px 0;
+      color: var(--text-muted);
+    }
+    .info-row span:last-child {
+      font-weight: 600;
+      color: #f1f5f9;
+    }
+    .btn-action {
+      width: 100%;
+      background: linear-gradient(135deg, #2563eb, #1d4ed8);
+      color: white;
+      border: none;
+      padding: 13px;
+      font-size: 14px;
+      font-weight: 700;
+      border-radius: 12px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: all 0.2s ease;
+      box-shadow: 0 4px 14px rgba(37, 99, 235, 0.4);
+    }
+    .btn-action:hover {
+      background: linear-gradient(135deg, #1d4ed8, #1e40af);
+      transform: translateY(-1px);
+    }
+    .btn-action:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+    }
+    .alert-box {
+      display: none;
+      margin-top: 12px;
+      padding: 10px;
+      border-radius: 10px;
+      font-size: 12px;
+      font-weight: 600;
+      text-align: center;
+    }
+    .alert-success { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
+    .alert-error { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+    .footer {
+      text-align: center;
+      font-size: 11px;
+      color: #64748b;
+      margin-top: 14px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="brand">
+        <div class="brand-icon">⚡</div>
+        <div class="brand-text">
+          <h1>Scribd Cloud</h1>
+          <p>Render Master Node</p>
+        </div>
+      </div>
+      <div class="badge-live">
+        <div class="pulse-dot"></div>
+        <span>LIVE</span>
+      </div>
+    </div>
+
+    <!-- Quick KPI Grid -->
+    <div class="grid">
+      <div class="card">
+        <div class="card-title">👥 Unique Users</div>
+        <div class="card-val" id="stat-users">0</div>
+        <div class="card-sub">Active bot users</div>
+      </div>
+      <div class="card">
+        <div class="card-title">📥 Requests</div>
+        <div class="card-val" id="stat-requests">0</div>
+        <div class="card-sub">Scribd links processed</div>
+      </div>
+      <div class="card">
+        <div class="card-title">⚡ Instant Cache</div>
+        <div class="card-val" id="stat-cache">0</div>
+        <div class="card-sub">0.2s instant deliveries</div>
+      </div>
+      <div class="card">
+        <div class="card-title">⏳ Queue Pending</div>
+        <div class="card-val" id="stat-queue">0</div>
+        <div class="card-sub">Awaiting render</div>
+      </div>
+    </div>
+
+    <!-- Kaggle Compute Cluster Status -->
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-title">🖥️ Kaggle Compute Cluster</div>
+        <div id="worker-status-badge" class="status-pill status-offline">CHECKING</div>
+      </div>
+      <div class="info-row">
+        <span>Hardware Allocation</span>
+        <span>30 GB RAM • 4 vCPUs</span>
+      </div>
+      <div class="info-row">
+        <span>Active Rendering Jobs</span>
+        <span id="worker-jobs">0 jobs</span>
+      </div>
+      <div class="info-row">
+        <span>Worker Session</span>
+        <span id="worker-uptime">0h / 11h</span>
+      </div>
+      <div class="info-row">
+        <span>Mini-Server Uptime</span>
+        <span id="server-uptime">0m</span>
+      </div>
+
+      <div style="margin-top: 14px;">
+        <button id="btn-restart" class="btn-action" onclick="triggerKaggle()">
+          <span>🚀</span>
+          <span>Start / Restart Kaggle Worker</span>
+        </button>
+        <div id="alert-box" class="alert-box"></div>
+      </div>
+    </div>
+
+    <div class="footer">
+      Developed with ❤️ by @cryvex4 • Scribd Cloud Architecture
+    </div>
+  </div>
+
+  <script>
+    async function updateStats() {
+      try {
+        const res = await fetch('/api/stats');
+        if (!res.ok) return;
+        const data = await res.json();
+
+        document.getElementById('stat-users').innerText = data.unique_users || 0;
+        document.getElementById('stat-requests').innerText = data.total_requests || 0;
+        document.getElementById('stat-cache').innerText = (data.cache_hits || 0) + ' (' + (data.total_cached_docs || 0) + ' in db)';
+        document.getElementById('stat-queue').innerText = data.pending_queue || 0;
+
+        const badge = document.getElementById('worker-status-badge');
+        if (data.worker && data.worker.online) {
+          badge.className = 'status-pill status-online';
+          badge.innerText = '🟢 ONLINE';
+          document.getElementById('worker-jobs').innerText = (data.worker.active_jobs || 0) + ' active';
+          document.getElementById('worker-uptime').innerText = (data.worker.uptime_hours || 0) + 'h / 11h';
+        } else {
+          badge.className = 'status-pill status-offline';
+          badge.innerText = '🔴 OFFLINE / STANDBY';
+          document.getElementById('worker-jobs').innerText = '0 jobs';
+          document.getElementById('worker-uptime').innerText = 'Standby';
+        }
+
+        const upSec = data.server_uptime_seconds || 0;
+        const upMins = Math.floor(upSec / 60);
+        const upHours = Math.floor(upMins / 60);
+        document.getElementById('server-uptime').innerText = upHours > 0 ? (upHours + 'h ' + (upMins % 60) + 'm') : (upMins + 'm ' + (upSec % 60) + 's');
+      } catch (e) {
+        console.error('Stats poll failed', e);
+      }
+    }
+
+    async function triggerKaggle() {
+      const btn = document.getElementById('btn-restart');
+      const alertBox = document.getElementById('alert-box');
+      btn.disabled = true;
+      btn.innerHTML = '<span>⏳</span><span>Pushing Notebook to Kaggle...</span>';
+      alertBox.style.display = 'none';
+
+      try {
+        const res = await fetch('/api/kaggle/restart', { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+          alertBox.className = 'alert-box alert-success';
+          alertBox.innerText = '✅ Kaggle Worker Started! 30GB compute session initialized.';
+        } else {
+          alertBox.className = 'alert-box alert-error';
+          alertBox.innerText = '❌ Failed to start: ' + (data.error || 'Check Kaggle credentials in Render environment');
+        }
+      } catch (err) {
+        alertBox.className = 'alert-box alert-error';
+        alertBox.innerText = '❌ Network Error: ' + err.message;
+      }
+      alertBox.style.display = 'block';
+
+      setTimeout(() => {
+        btn.disabled = false;
+        btn.innerHTML = '<span>🚀</span><span>Start / Restart Kaggle Worker</span>';
+        updateStats();
+      }, 5000);
+    }
+
+    updateStats();
+    setInterval(updateStats, 8000);
+  </script>
+</body>
+</html>
+"""
+
+
+# -------------------------------------------------------------
 # HTTP Server for Render Health Checks, Webhooks & Uptime Monitors
 # -------------------------------------------------------------
 class RenderHealthServer(BaseHTTPRequestHandler):
     def do_HEAD(self):
-        """Supports HTTP HEAD requests from UptimeRobot / BetterUptime monitors."""
-        if self.path in ["/status", "/health", "/"]:
+        """Supports HTTP HEAD requests from UptimeRobot / BetterUptime monitors (0 body bandwidth)."""
+        if self.path in ["/status", "/health", "/", "/dashboard", "/api/stats"]:
             self.send_response(200)
-            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Type", "text/html; charset=utf-8" if self.path != "/api/stats" else "application/json")
             self.end_headers()
         else:
             self.send_error(404, "Not Found")
 
     def do_GET(self):
-        if self.path in ["/status", "/health", "/"]:
+        # 1. JSON Telemetry API for AJAX auto-refresh
+        if self.path == "/api/stats":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(get_live_stats()).encode("utf-8"))
+
+        # 2. Render Internal Health Check (Pure JSON)
+        elif self.path == "/health":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -352,18 +773,27 @@ class RenderHealthServer(BaseHTTPRequestHandler):
                 "timestamp": int(time.time())
             }
             self.wfile.write(json.dumps(resp).encode("utf-8"))
+
+        # 3. Mobile-Optimized Control Dashboard on /status, /dashboard, and /
+        elif self.path in ["/status", "/dashboard", "/"]:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(DASHBOARD_HTML.encode("utf-8"))
+
         else:
             self.send_error(404, "Not Found")
 
     def do_POST(self):
-        # Endpoint to trigger Kaggle push remotely
+        # Endpoint to trigger Kaggle push remotely from the dashboard button
         if self.path == "/api/kaggle/restart":
             ok = trigger_kaggle_worker()
-            self.send_response(200 if ok else 500)
+            self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps({"success": ok}).encode("utf-8"))
         else:
+            self.send_error(404, "Not Found")
             self.send_error(404, "Not Found")
 
     def log_message(self, format, *args):
