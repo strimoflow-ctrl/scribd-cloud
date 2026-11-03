@@ -173,12 +173,23 @@ def compile_worker_notebook_json():
     return json.dumps(notebook)
 
 
-def trigger_kaggle_worker():
+LAST_KAGGLE_TRIGGER_TIME = 0
+
+def trigger_kaggle_worker(force=False):
     """Pushes fresh notebook to Kaggle to start or rotate the 30GB compute session."""
+    global LAST_KAGGLE_TRIGGER_TIME
+
     if not KAGGLE_USERNAME or not KAGGLE_KEY:
         err = "KAGGLE_USERNAME or KAGGLE_KEY is missing in Render Environment Variables!"
         print(f"❌ {err}")
         return False, err
+
+    now = time.time()
+    # Enforce strict 10-minute cooldown to prevent multiple spam launches!
+    if not force and (now - LAST_KAGGLE_TRIGGER_TIME) < 600:
+        remaining = int(600 - (now - LAST_KAGGLE_TRIGGER_TIME))
+        print(f"⏳ [Kaggle Cooldown] Launch blocked. Cooldown active for {remaining}s.")
+        return False, f"Cooldown active: Please wait {remaining} seconds before launching another session."
 
     try:
         print(f"🚀 [Kaggle Orchestrator] Compiling notebook for user '{KAGGLE_USERNAME}' slug '{KAGGLE_SLUG}'...")
@@ -207,6 +218,7 @@ def trigger_kaggle_worker():
         print(f"📋 [Kaggle Push Response] Status: {resp.status_code} | Body: {resp.text}")
 
         if resp.status_code in (200, 201):
+            LAST_KAGGLE_TRIGGER_TIME = now
             return True, "Kaggle Worker launched successfully! 30GB node is booting."
         else:
             try:
@@ -229,35 +241,36 @@ def start_watchdog_thread():
     print("🛡️ [Watchdog] Heartbeat and Auto-Restart listener active...")
     while True:
         try:
-            # Check restart trigger node
+            # 1. Check if worker cleanly requested restart (11-hour mark)
             r = session.get(fb_url("control/trigger_restart"), timeout=5)
             if r.ok:
                 val = r.json()
                 if val is True:
-                    print("⚡ [Auto-Restart] Immediate restart requested by Kaggle worker!")
+                    print("⚡ [Auto-Restart] 11-hour handoff requested by Kaggle worker!")
                     session.put(fb_url("control/trigger_restart"), json=False, timeout=5)
-                    trigger_kaggle_worker()
-                elif isinstance(val, (int, float)) and time.time() >= val:
-                    print("⚡ [Auto-Restart] Scheduled timer reached! Launching new Kaggle worker...")
-                    session.put(fb_url("control/trigger_restart"), json=False, timeout=5)
-                    trigger_kaggle_worker()
+                    trigger_kaggle_worker(force=True)
 
-            # Check if worker is dead while queue has tasks
+            # 2. Check worker heartbeat - only trigger if dead for > 15 mins AND pending tasks exist
             status_res = session.get(fb_url("worker/heartbeat"), timeout=5)
             if status_res.ok and status_res.json():
                 hb = status_res.json()
-                last_seen = hb.get("last_seen", 0)
-                # If worker hasn't pinged in > 10 minutes (600s)
-                if time.time() - last_seen > 600:
+                last_seen = hb.get("timestamp") or hb.get("last_seen", 0)
+                # Only check if worker previously pinged and has gone silent for > 15 minutes (900s)
+                if last_seen > 0 and (time.time() - last_seen > 900):
                     q_res = session.get(fb_url("queue"), timeout=5)
-                    if q_res.ok and q_res.json():
-                        print("⚠️ [Worker Offline] Pending tasks in queue but worker heartbeat expired! Auto-restarting Kaggle...")
-                        trigger_kaggle_worker()
+                    if q_res.ok and isinstance(q_res.json(), dict):
+                        has_pending = any(
+                            isinstance(t, dict) and t.get("status") == "pending"
+                            for t in q_res.json().values()
+                        )
+                        if has_pending:
+                            print("⚠️ [Worker Offline] Pending tasks in queue and heartbeat expired! Triggering Kaggle worker...")
+                            trigger_kaggle_worker()
 
         except Exception as e:
             pass
 
-        # Check every 60 seconds (Uses < 100 bytes per check = negligible bandwidth)
+        # Check every 60 seconds
         time.sleep(60)
 
 
