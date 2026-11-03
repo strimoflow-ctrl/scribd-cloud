@@ -212,6 +212,16 @@ async function renderScribdDocument(docId, rawOutputPath, startPage = 1, endPage
     let chunkCount = 0;
     let capturedCount = 0;
 
+    // Adaptive JPEG quality: keeps 1000+ page documents under Telegram's 50MB limit
+    let screenshotQuality = 75;
+    if (totalToCapture > 600) {
+      screenshotQuality = 40; // ~35KB/page -> 1000 pages = ~35-38 MB
+    } else if (totalToCapture > 250) {
+      screenshotQuality = 52; // ~50KB/page -> 400 pages = ~20 MB
+    } else if (totalToCapture > 80) {
+      screenshotQuality = 65; // ~75KB/page -> 150 pages = ~11 MB
+    }
+
     for (let i = effectiveStart; i <= effectiveEnd; i++) {
       const pageIdx = i - effectiveStart + 1;
       const pct = Math.round((pageIdx / totalToCapture) * 100);
@@ -256,7 +266,7 @@ async function renderScribdDocument(docId, rawOutputPath, startPage = 1, endPage
 
       const pageElement = await page.$(`#outer_page_${i}`);
       if (pageElement) {
-        const imgBuffer = await pageElement.screenshot({ type: 'jpeg', quality: 78 });
+        const imgBuffer = await pageElement.screenshot({ type: 'jpeg', quality: screenshotQuality });
         const embeddedImage = await currentChunkDoc.embedJpg(imgBuffer);
         const pdfPage = currentChunkDoc.addPage([embeddedImage.width, embeddedImage.height]);
         pdfPage.drawImage(embeddedImage, {

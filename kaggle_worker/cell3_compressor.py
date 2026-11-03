@@ -41,18 +41,20 @@ def compress_pdf_lossless(input_path, output_path=None, preset="ebook"):
 
     orig_mb = get_file_size_mb(input_path)
 
+    target_dpi = "120" if clean_preset in ("ebook", "printer") else "72"
     gs_cmd = [
         "gs",
         "-sDEVICE=pdfwrite",
         "-dCompatibilityLevel=1.4",
         f"-dPDFSETTINGS=/{clean_preset}",
-        "-dColorImageResolution=150",
-        "-dGrayImageResolution=150",
-        "-dMonoImageResolution=150",
+        "-dColorImageDownsampleType=/Bicubic",
+        f"-dColorImageResolution={target_dpi}",
+        "-dColorImageDownsampleThreshold=1.0",
+        "-dGrayImageDownsampleType=/Bicubic",
+        f"-dGrayImageResolution={target_dpi}",
+        "-dGrayImageDownsampleThreshold=1.0",
         "-dDownsampleColorImages=true",
         "-dDownsampleGrayImages=true",
-        "-dAutoFilterColorImages=true",
-        "-dColorImageFilter=/DCTEncode",
         "-dNOPAUSE",
         "-dQUIET",
         "-dBATCH",

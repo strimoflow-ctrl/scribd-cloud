@@ -5,6 +5,7 @@ import os
 import sys
 import time
 import json
+import math
 import subprocess
 import threading
 import concurrent.futures
@@ -186,44 +187,79 @@ def process_single_task(task_id, task_data):
         print(f"🗜️ Ghostscript Finished: {raw_size} MB ➔ {final_size} MB ({comp_res['reduction_pct']}% reduction)")
 
         # Step 3: Check Telegram 50MB file size ceiling
-        if final_size > 50.0:
-            print("⚠️ Compressed size still exceeds 50MB! Applying aggressive /screen compression...")
-            aggressive_pdf = os.path.join(DOWNLOAD_DIR, f"scribd_{doc_id}_screen.pdf")
-            comp_res = compress_pdf_lossless(raw_pdf_path, aggressive_pdf, preset="/screen")
-            final_pdf_path = comp_res["final_path"]
-            final_size = comp_res["final_size_mb"]
+        uploaded_parts = []
+        if final_size > 49.0:
+            print(f"⚠️ Document ({final_size} MB) exceeds Telegram 49MB limit! Auto-splitting into parts...")
+            num_parts = int(math.ceil(final_size / 42.0))
+            pages_total = int(page_count) if (isinstance(page_count, int) or str(page_count).isdigit()) else 500
+            pages_per_part = int(math.ceil(pages_total / num_parts))
 
-        # Step 4: Direct Upload to Telegram User (Bypasses Render server entirely)
-        caption = (
-            f"📚 *{title}*\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📑 *Pages:* {page_count}\n"
-            f"🗜️ *Original:* {raw_size} MB ➔ *Compressed:* {final_size} MB (-{comp_res['reduction_pct']}%)\n"
-            f"⚡ *Engine:* Ghostscript Lossless + Kaggle 30GB Cloud\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"🤖 *Downloaded via:* @ScribdPdfDownloaderBot\n"
-            f"👨‍💻 *Developer:* @cryvex4"
-        )
+            for p_idx in range(num_parts):
+                p_start = p_idx * pages_per_part + 1
+                p_end = min((p_idx + 1) * pages_per_part, pages_total)
+                part_pdf = os.path.join(DOWNLOAD_DIR, f"scribd_{doc_id}_part{p_idx+1}.pdf")
 
-        file_id = send_telegram_doc(chat_id, final_pdf_path, caption)
+                # Fast Ghostscript Page Extraction
+                slice_cmd = [
+                    "gs", "-sDEVICE=pdfwrite", "-dCompatibilityLevel=1.4",
+                    "-dNOPAUSE", "-dQUIET", "-dBATCH",
+                    f"-dFirstPage={p_start}", f"-dLastPage={p_end}",
+                    f"-sOutputFile={part_pdf}", final_pdf_path
+                ]
+                subprocess.check_call(slice_cmd)
+                part_size = get_file_size_mb(part_pdf)
 
-        if file_id:
-            # Step 5: Save Telegram file_id to Firebase Cloud Cache (0.2s instant for next user!)
-            cache_payload = {
-                "file_id": file_id,
-                "title": title,
-                "totalPages": page_count,
-                "cachedAt": int(time.time()),
-                "fileSizeMb": final_size
-            }
-            fb_put(f"cache/{doc_id}", cache_payload)
-            print(f"💾 Saved doc {doc_id} to Firebase Cloud Cache! (file_id: {file_id[:15]}...)")
+                part_caption = (
+                    f"📚 *{title}* (Part {p_idx+1}/{num_parts})\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"📑 *Pages:* {p_start} - {p_end} (of {pages_total})\n"
+                    f"🗜️ *Part Size:* {part_size} MB\n"
+                    f"⚡ *Engine:* Ghostscript Lossless + Kaggle 30GB Cloud\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"🤖 *Downloaded via:* @cryvex_uploader_bot\n"
+                    f"👨‍💻 *Developer:* @cryvex4"
+                )
+                fid = send_telegram_doc(chat_id, part_pdf, part_caption)
+                if fid:
+                    uploaded_parts.append(fid)
 
-            # Remove task from queue
-            fb_delete(f"queue/{task_id}")
-            print(f"🎉 [TASK COMPLETED] Doc {doc_id} delivered successfully!")
+            if uploaded_parts:
+                fb_delete(f"queue/{task_id}")
+                print(f"🎉 [TASK COMPLETED] Doc {doc_id} delivered in {len(uploaded_parts)} parts successfully!")
+            else:
+                raise RuntimeError("Telegram rejected part uploads.")
+
         else:
-            raise RuntimeError("Telegram rejected file upload.")
+            caption = (
+                f"📚 *{title}*\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"📑 *Pages:* {page_count}\n"
+                f"🗜️ *Original:* {raw_size} MB ➔ *Compressed:* {final_size} MB (-{comp_res['reduction_pct']}%)\n"
+                f"⚡ *Engine:* Ghostscript Lossless + Kaggle 30GB Cloud\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"🤖 *Downloaded via:* @cryvex_uploader_bot\n"
+                f"👨‍💻 *Developer:* @cryvex4"
+            )
+
+            file_id = send_telegram_doc(chat_id, final_pdf_path, caption)
+
+            if file_id:
+                # Step 5: Save Telegram file_id to Firebase Cloud Cache (0.2s instant for next user!)
+                cache_payload = {
+                    "file_id": file_id,
+                    "title": title,
+                    "totalPages": page_count,
+                    "cachedAt": int(time.time()),
+                    "fileSizeMb": final_size
+                }
+                fb_put(f"cache/{doc_id}", cache_payload)
+                print(f"💾 Saved doc {doc_id} to Firebase Cloud Cache! (file_id: {file_id[:15]}...)")
+
+                # Remove task from queue
+                fb_delete(f"queue/{task_id}")
+                print(f"🎉 [TASK COMPLETED] Doc {doc_id} delivered successfully!")
+            else:
+                raise RuntimeError("Telegram rejected file upload.")
 
     except Exception as e:
         err_str = str(e)
@@ -238,13 +274,16 @@ def process_single_task(task_id, task_data):
         )
 
     finally:
-        # Step 6: Cleanup local temporary files immediately to keep disk clean
-        for p in [raw_pdf_path, compressed_pdf_path]:
-            if os.path.exists(p):
-                try:
-                    os.unlink(p)
-                except Exception:
-                    pass
+        # Step 6: Cleanup ALL local temporary files for this document
+        try:
+            for fname in os.listdir(DOWNLOAD_DIR):
+                if fname.startswith(f"scribd_{doc_id}"):
+                    try:
+                        os.unlink(os.path.join(DOWNLOAD_DIR, fname))
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
         with ACTIVE_TASKS_LOCK:
             ACTIVE_TASKS.discard(task_id)
