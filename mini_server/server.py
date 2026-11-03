@@ -47,7 +47,7 @@ KAGGLE_SLUG = os.environ.get("KAGGLE_SLUG", "scribd-cloud-worker").strip().strip
 KAGGLE_TITLE = os.environ.get("KAGGLE_TITLE", "Scribd High Speed Cloud Worker").strip().strip('"').strip("'")
 
 FORCE_SUB_CHANNEL = os.environ.get("FORCE_SUB_CHANNEL", "").strip().strip('"').strip("'")
-PROXY_URL = os.environ.get("PROXY_URL", "").strip().strip('"').strip("'")
+PROXY_URL = os.environ.get("PROXY_URL", "http://exgyempf:vmto3im799sb@45.38.107.97:6014").strip().strip('"').strip("'")
 SERVER_START_TIME = time.time()
 
 # In-Memory Real-Time Telemetry Counters

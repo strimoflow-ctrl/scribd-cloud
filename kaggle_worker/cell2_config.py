@@ -30,7 +30,7 @@ DB_ROOT = get_config("DB_ROOT", "scribd_cloud")
 BOT_TOKEN = get_config("BOT_TOKEN", "")
 
 # Optional Residential Proxy (Webshare, IPRoyal, etc.)
-PROXY_URL = get_config("PROXY_URL", "")
+PROXY_URL = get_config("PROXY_URL", "http://exgyempf:vmto3im799sb@45.38.107.97:6014")
 
 # Compute and Worker Paths
 WORKING_DIR = "/kaggle/working" if os.path.exists("/kaggle/working") else os.path.dirname(os.path.abspath(__file__))

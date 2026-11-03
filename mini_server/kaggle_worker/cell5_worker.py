@@ -17,13 +17,20 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-from cell2_config import (
-    FIREBASE_DB_URL, DB_ROOT, BOT_TOKEN, PROXY_URL,
-    WORKING_DIR, DOWNLOAD_DIR, MAX_RUNTIME_SECONDS,
-    WORKER_SESSION_START, MAX_PARALLEL_RENDERS,
-    fb_get, fb_put, fb_delete
-)
-from cell3_compressor import compress_pdf_lossless, get_file_size_mb
+try:
+    from cell2_config import (
+        FIREBASE_DB_URL, DB_ROOT, BOT_TOKEN, PROXY_URL,
+        WORKING_DIR, DOWNLOAD_DIR, MAX_RUNTIME_SECONDS,
+        WORKER_SESSION_START, MAX_PARALLEL_RENDERS,
+        fb_get, fb_put, fb_delete
+    )
+except ImportError:
+    pass
+
+try:
+    from cell3_compressor import compress_pdf_lossless, get_file_size_mb
+except ImportError:
+    pass
 
 print("🚀 [CELL 5] Initializing High-Performance Kaggle Worker Loop...")
 
