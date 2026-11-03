@@ -104,11 +104,31 @@ async function renderScribdDocument(docId, rawOutputPath, startPage = 1, endPage
     launchArgs.push(proxyServerArg);
   }
 
-  const browser = await puppeteer.launch({
+  // Detect pre-installed system Chrome on Kaggle or Linux
+  let executablePath = null;
+  const candidates = [
+    '/usr/bin/google-chrome',
+    '/usr/bin/google-chrome-stable',
+    '/usr/bin/chromium-browser',
+    '/usr/bin/chromium'
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) {
+      executablePath = p;
+      break;
+    }
+  }
+
+  const launchOptions = {
     headless: 'new',
     protocolTimeout: 600000,
     args: launchArgs
-  });
+  };
+  if (executablePath) {
+    launchOptions.executablePath = executablePath;
+  }
+
+  const browser = await puppeteer.launch(launchOptions);
 
   const tempChunks = [];
   const downloadsDir = path.dirname(rawOutputPath);

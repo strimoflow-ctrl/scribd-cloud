@@ -31,7 +31,7 @@ run_cmd(f"{sys.executable} -m pip install -q requests pyrebase4 nest_asyncio")
 # 4. Install Node.js Puppeteer & Stealth libraries for rendering
 print("🌐 Installing Node.js Puppeteer Stealth & PDF-Lib...")
 run_cmd("npm init -y > /dev/null 2>&1")
-run_cmd("npm install --silent puppeteer-extra puppeteer-extra-plugin-stealth pdf-lib")
+run_cmd("npm install --silent puppeteer puppeteer-extra puppeteer-extra-plugin-stealth pdf-lib")
 
 print("✨ [CELL 1 Complete] All Compute Dependencies Initialized!")
 
