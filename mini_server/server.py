@@ -278,8 +278,68 @@ threading.Thread(target=start_watchdog_thread, daemon=True).start()
 
 
 # -------------------------------------------------------------
-# Telegram Bot Handlers
+# Telegram Bot Handlers & Force Subscribe System
 # -------------------------------------------------------------
+def check_membership(user_id):
+    """Checks if the user has joined the official channel."""
+    if not FORCE_SUB_CHANNEL:
+        return True
+    try:
+        channel = FORCE_SUB_CHANNEL if FORCE_SUB_CHANNEL.startswith("@") or FORCE_SUB_CHANNEL.startswith("-100") else f"@{FORCE_SUB_CHANNEL}"
+        member = bot.get_chat_member(channel, user_id)
+        return member.status in ["member", "administrator", "creator"]
+    except Exception as e:
+        print(f"⚠️ [FSub Warning]: {e}")
+        return True
+
+
+def send_join_prompt(chat_id, doc_id=None, url_slug=None):
+    """Sends sleek Force Subscribe lock message with join & verify buttons."""
+    clean_channel = FORCE_SUB_CHANNEL.replace("@", "").strip()
+    invite_url = f"https://t.me/{clean_channel}" if clean_channel else "https://t.me"
+
+    text = (
+        "🔒 *Access Locked!*\n\n"
+        "Bot use karne ke liye pehle hamare official channel ko join karein. "
+        "Join karte hi aapka download activate ho jayega! ✨"
+    )
+
+    markup = telebot.types.InlineKeyboardMarkup()
+    if clean_channel:
+        markup.add(telebot.types.InlineKeyboardButton("📢 Join Official Channel", url=invite_url))
+    cb_data = f"check_{doc_id}:{url_slug}" if doc_id else "check_start"
+    markup.add(telebot.types.InlineKeyboardButton("🔄 Joined / Try Again", callback_data=cb_data))
+
+    return bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+
+def send_welcome_message(chat_id, first_name="Dost"):
+    """Sends official welcome screen with key features & support button (L858-L869)."""
+    welcome_text = (
+        f"🌟 *WELCOME TO SCRIBD HD DOWNLOADER*\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Namaste *{first_name}*! Ab aap Scribd ke kisi bhi document ko bilkul *FREE* aur *100% Original Quality* me download kar sakte hain! 🚀\n\n"
+        f"✨ *Key Features:*\n"
+        f"├ 📄 *All Pages Complete*\n"
+        f"├ 🎯 *Zero Margin Cutoff*\n"
+        f"├ 🔤 *Crystal Clear Font*\n"
+        f"├ 🖼️ *Full Image & Diagram Support*\n"
+        f"└ ⚡ *High-Speed Cloud Engine*\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"👨‍💻 *Made with ❤️ by* @cryvex4"
+    )
+    markup = telebot.types.InlineKeyboardMarkup()
+    buttons = [
+        telebot.types.InlineKeyboardButton("💬 Support (@cryvex4)", url="https://t.me/cryvex4")
+    ]
+    if FORCE_SUB_CHANNEL:
+        clean_channel = FORCE_SUB_CHANNEL.replace("@", "").strip()
+        buttons.append(telebot.types.InlineKeyboardButton("📢 Channel", url=f"https://t.me/{clean_channel}"))
+    markup.row(*buttons)
+
+    bot.send_message(chat_id, welcome_text, reply_markup=markup, parse_mode="Markdown", disable_web_page_preview=True)
+
+
 def extract_scribd_info(text):
     if not text:
         return None
@@ -297,44 +357,51 @@ def extract_scribd_info(text):
 
 @bot.message_handler(commands=["start"])
 def handle_start(msg):
+    user_id = msg.from_user.id
+    chat_id = msg.chat.id
     first_name = msg.from_user.first_name or "Dost"
-    text = (
-        f"🌟 *WELCOME TO SCRIBD CLOUD DOWNLOADER*\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"Namaste *{first_name}*! Ab aap Scribd ke kisi bhi document ko bilkul *FREE*, "
-        f"*100% Original Quality* aur *Compressed HD* me download kar sakte hain! 🚀\n\n"
-        f"⚡ *Features:*\n"
-        f"├ 🚀 *30 GB High-Speed Cloud Compute*\n"
-        f"├ 🗜️ *ILovePDF-Style Lossless Compression*\n"
-        f"├ 📄 *100% Crisp Font & Zero White Pages*\n"
-        f"└ ⚡ *0.2s Instant Delivery for Cached Docs*\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"👨‍💻 *Made with ❤️ by* @cryvex4"
-    )
-    bot.send_message(msg.chat.id, text)
 
-
-@bot.message_handler(func=lambda m: True)
-def handle_incoming_message(msg):
-    text = msg.text or ""
-    if text.startswith("/"):
+    if not check_membership(user_id):
+        send_join_prompt(chat_id, None, None)
         return
 
-    info = extract_scribd_info(text)
-    if not info:
-        bot.reply_to(
-            msg,
-            "⚠️ *Invalid Link!*\n\n"
-            "Kripya ek valid Scribd document link bhejein.\n"
-            "*Example:* `https://www.scribd.com/document/362922366/...`"
+    send_welcome_message(chat_id, first_name)
+
+
+@bot.callback_query_handler(func=lambda call: call.data and call.data.startswith("check_"))
+def handle_check_callback(call):
+    user_id = call.from_user.id
+    chat_id = call.message.chat.id
+    first_name = call.from_user.first_name or "Dost"
+
+    if not check_membership(user_id):
+        bot.answer_callback_query(
+            call.id,
+            "⚠️ Aapne abhi tak channel join nahi kiya hai! Kripya pehle channel join karein.",
+            show_alert=True
         )
         return
 
-    doc_id = info["docId"]
-    chat_id = msg.chat.id
-    user_id = msg.from_user.id
-    username = msg.from_user.username or msg.from_user.first_name or "User"
+    bot.answer_callback_query(call.id, "✅ Membership Verified! Welcome!")
+    try:
+        bot.delete_message(chat_id, call.message.message_id)
+    except Exception:
+        pass
 
+    raw_param = call.data.replace("check_", "").strip()
+    if raw_param and raw_param not in ("start", "idle") and ":" in raw_param:
+        parts = raw_param.split(":")
+        pending_doc_id = parts[0]
+        pending_slug = parts[1] if len(parts) > 1 and parts[1] != "None" else None
+        username = call.from_user.username or first_name
+        dispatch_scribd_task(chat_id, user_id, username, pending_doc_id, pending_slug)
+    else:
+        # Directly show the complete Start Welcome screen (L858-L869)
+        send_welcome_message(chat_id, first_name)
+
+
+def dispatch_scribd_task(chat_id, user_id, username, doc_id, url_slug=None):
+    """Handles smart cache check or dispatches high-speed task to Kaggle."""
     # Track Telemetry
     STATS["total_requests"] += 1
     STATS["unique_users"].add(user_id)
@@ -346,6 +413,8 @@ def handle_incoming_message(msg):
         pages = cached.get("totalPages", "Full")
         if cached.get("file_id"):
             STATS["cache_hits"] += 1
+            markup = telebot.types.InlineKeyboardMarkup()
+            markup.add(telebot.types.InlineKeyboardButton("💬 Support (@cryvex4)", url="https://t.me/cryvex4"))
             bot.send_document(
                 chat_id,
                 cached["file_id"],
@@ -354,17 +423,20 @@ def handle_incoming_message(msg):
                     f"━━━━━━━━━━━━━━━━━━━━━━\n"
                     f"📑 *Pages:* {pages}\n"
                     f"⚡ *Delivered Instantly via High-Speed Cloud Cache!* (0.2s)\n"
+                    f"🎯 *Quality:* 100% Crisp Vector HD\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━\n"
                     f"🤖 *Downloaded via:* @cryvex_uploader_bot\n"
                     f"👨‍💻 *Developer:* @cryvex4"
-                )
+                ),
+                reply_markup=markup
             )
             return
         elif cached.get("download_url"):
             STATS["cache_hits"] += 1
             f_size = cached.get("fileSizeMb", "Ultra HD")
             markup = telebot.types.InlineKeyboardMarkup()
-            markup.add(telebot.types.InlineKeyboardButton(f"🚀 Download Full PDF ({f_size} MB)", url=cached["download_url"]))
+            markup.row(telebot.types.InlineKeyboardButton(f"🚀 Download Full PDF ({f_size} MB)", url=cached["download_url"]))
+            markup.row(telebot.types.InlineKeyboardButton("💬 Support (@cryvex4)", url="https://t.me/cryvex4"))
             bot.send_message(
                 chat_id,
                 f"📚 *{title}*\n"
@@ -383,14 +455,30 @@ def handle_incoming_message(msg):
             )
             return
 
-    # 2. PUSH TASK TO FIREBASE QUEUE FOR KAGGLE
+    # 2. INITIAL STATUS MESSAGE (Stage 1: Connecting)
+    clean_title = url_slug.replace("-", " ").replace("_", " ").title() if url_slug else f"Doc #{doc_id}"
+    init_status_text = (
+        f"🔍 *CONNECTING TO SCRIBD*\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Connecting to Scribd servers...\n"
+        f"[██░░░░░░░░] 15%\n"
+        f"⏳ *Time:* 0.0s\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"👨‍💻 *Made by* @cryvex4"
+    )
+    status_msg = bot.send_message(chat_id, init_status_text, parse_mode="Markdown")
+    status_msg_id = status_msg.message_id if status_msg else None
+
+    # 3. PUSH TASK TO FIREBASE QUEUE FOR KAGGLE WORKER
     task_id = f"task_{doc_id}_{int(time.time())}"
     task_payload = {
         "docId": doc_id,
-        "urlSlug": info["urlSlug"],
+        "urlSlug": url_slug,
+        "title": clean_title,
         "chatId": chat_id,
         "userId": user_id,
         "username": username,
+        "statusMsgId": status_msg_id,
         "status": "pending",
         "createdAt": int(time.time())
     }
@@ -398,19 +486,36 @@ def handle_incoming_message(msg):
     ok = push_queue_task(task_id, task_payload)
     if ok:
         STATS["queue_tasks"] += 1
-        bot.send_message(
-            chat_id,
-            f"⚡ *CLOUD TASK INITIALIZED*\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📖 *Doc ID:* `{doc_id}`\n"
-            f"⚙️ *Cluster:* 30 GB High-Speed Compute Node\n"
-            f"🗜️ *Compressor:* Lossless Ghostscript Engine (Active)\n"
-            f"⏳ *Status:* Assigned to worker. Document will be delivered shortly! 🚀\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"👨‍💻 *Made by* @cryvex4"
-        )
     else:
         bot.send_message(chat_id, "❌ *System Error:* Could not assign task. Please retry.")
+
+
+@bot.message_handler(func=lambda m: True)
+def handle_incoming_message(msg):
+    text = msg.text or ""
+    if text.startswith("/"):
+        return
+
+    info = extract_scribd_info(text)
+    if not info:
+        bot.reply_to(
+            msg,
+            "⚠️ *Invalid Link!*\n\n"
+            "Kripya ek valid Scribd document link bhejein.\n"
+            "*Example:* `https://www.scribd.com/document/362922366/...`"
+        )
+        return
+
+    user_id = msg.from_user.id
+    chat_id = msg.chat.id
+    username = msg.from_user.username or msg.from_user.first_name or "User"
+
+    # Check Force Subscribe
+    if not check_membership(user_id):
+        send_join_prompt(chat_id, info["docId"], info["urlSlug"])
+        return
+
+    dispatch_scribd_task(chat_id, user_id, username, info["docId"], info["urlSlug"])
 
 
 # -------------------------------------------------------------

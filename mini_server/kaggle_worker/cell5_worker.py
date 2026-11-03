@@ -68,6 +68,86 @@ def send_telegram_msg(chat_id, text, reply_to_message_id=None):
     return None
 
 
+def get_progress_bar(percent):
+    """Generates sleek Unicode progress bar: [████░░░░░░]."""
+    total = 10
+    clamped = max(0, min(100, int(percent or 0)))
+    filled = int(round((clamped / 100.0) * total))
+    return "█" * filled + "░" * (total - filled)
+
+
+class StatusTracker:
+    """Manages real-time live status updates on Telegram with rate-limiting & auto-cleanup."""
+    def __init__(self, chat_id, status_msg_id, bot_token):
+        self.chat_id = chat_id
+        self.status_msg_id = status_msg_id
+        self.bot_token = bot_token
+        self.start_time = time.time()
+        self.last_update_time = 0
+        self.last_text = ""
+
+    def update(self, stage, percent, text, force=False):
+        if not self.status_msg_id or not self.chat_id:
+            return
+
+        now = time.time()
+        # Throttling: minimum 2.5 seconds between Telegram message edits
+        if not force and (now - self.last_update_time < 2.5):
+            return
+
+        elapsed = round(now - self.start_time, 1)
+        bar = get_progress_bar(percent)
+
+        if stage == "connecting":
+            header = "🔍 *CONNECTING TO SCRIBD*"
+        elif stage == "rendering":
+            header = "⚡ *RENDERING HD PAGES*"
+        elif stage == "compressing":
+            header = "🗜️ *OPTIMIZING PDF*"
+        elif stage == "uploading":
+            header = "📤 *UPLOADING TO TELEGRAM*"
+        else:
+            header = "⚡ *SCRIBD HD DOWNLOADER*"
+
+        full_message = (
+            f"{header}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"{text}\n"
+            f"[{bar}] {int(percent)}%\n"
+            f"⏳ *Time:* {elapsed}s\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"👨‍💻 *Made by* @cryvex4"
+        )
+
+        if full_message == self.last_text:
+            return
+
+        self.last_text = full_message
+        self.last_update_time = now
+
+        url = f"https://api.telegram.org/bot{self.bot_token}/editMessageText"
+        payload = {
+            "chat_id": self.chat_id,
+            "message_id": self.status_msg_id,
+            "text": full_message,
+            "parse_mode": "Markdown"
+        }
+        try:
+            requests.post(url, json=payload, timeout=5)
+        except Exception:
+            pass
+
+    def delete(self):
+        """Deletes the transient progress status message once document is delivered."""
+        if not self.status_msg_id or not self.chat_id:
+            return
+        url = f"https://api.telegram.org/bot{self.bot_token}/deleteMessage"
+        try:
+            requests.post(url, json={"chat_id": self.chat_id, "message_id": self.status_msg_id}, timeout=5)
+        except Exception:
+            pass
+
+
 def send_telegram_button(chat_id, text, download_url, btn_text):
     """Sends a message with an interactive download button on Telegram."""
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -76,9 +156,14 @@ def send_telegram_button(chat_id, text, download_url, btn_text):
         "text": text,
         "parse_mode": "Markdown",
         "reply_markup": {
-            "inline_keyboard": [[
-                {"text": btn_text, "url": download_url}
-            ]]
+            "inline_keyboard": [
+                [
+                    {"text": btn_text, "url": download_url}
+                ],
+                [
+                    {"text": "💬 Support (@cryvex4)", "url": "https://t.me/cryvex4"}
+                ]
+            ]
         }
     }
     try:
@@ -126,7 +211,7 @@ def upload_to_temp_cloud(filepath):
     return None
 
 
-def send_telegram_doc(chat_id, pdf_path, caption):
+def send_telegram_doc(chat_id, pdf_path, caption, reply_markup=None):
     """Uploads document directly from Kaggle compute to Telegram (0% Render bandwidth)."""
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
     filename = os.path.basename(pdf_path)
@@ -138,6 +223,8 @@ def send_telegram_doc(chat_id, pdf_path, caption):
                 "caption": caption,
                 "parse_mode": "Markdown"
             }
+            if reply_markup:
+                data["reply_markup"] = json.dumps(reply_markup) if isinstance(reply_markup, dict) else reply_markup
             print(f"📤 Uploading '{filename}' ({get_file_size_mb(pdf_path)} MB) directly to Telegram...")
             r = requests.post(url, data=data, files=files, timeout=300)
             if r.ok:
@@ -151,8 +238,8 @@ def send_telegram_doc(chat_id, pdf_path, caption):
     return None
 
 
-def execute_downloader_process(doc_id, output_path, start_page=1, end_page=None):
-    """Invokes Node Puppeteer downloader with DOM pruning and zero disk cache."""
+def execute_downloader_process(doc_id, output_path, start_page=1, end_page=None, on_progress=None):
+    """Invokes Node Puppeteer downloader with real-time stdout streaming and DOM pruning."""
     downloader_script = os.path.join(WORKING_DIR, "downloader.js")
     if not os.path.exists(downloader_script):
         # Fallback to local script in same folder
@@ -177,22 +264,40 @@ def execute_downloader_process(doc_id, output_path, start_page=1, end_page=None)
         stderr=subprocess.PIPE,
         text=True,
         encoding="utf-8",
-        cwd=WORKING_DIR
+        cwd=WORKING_DIR,
+        bufsize=1
     )
 
-    stdout, stderr = proc.communicate()
-
     result_data = None
-    for line in stdout.splitlines():
+
+    # Stream stdout line by line in real time
+    for line in iter(proc.stdout.readline, ""):
+        line = line.strip()
+        if not line:
+            continue
         if line.startswith("__FINAL_RESULT__"):
             try:
                 result_data = json.loads(line.replace("__FINAL_RESULT__", "").strip())
             except Exception:
                 pass
+        elif line.startswith("{") and line.endswith("}"):
+            try:
+                prog = json.loads(line)
+                if on_progress and callable(on_progress):
+                    on_progress(prog)
+            except Exception:
+                print(f"[Node Output] {line}")
+        else:
+            print(f"[Node Output] {line}")
+
+    proc.stdout.close()
+    stderr_out = proc.stderr.read()
+    proc.stderr.close()
+    proc.wait()
 
     if proc.returncode != 0 or not result_data:
-        err_msg = stderr.strip() or stdout.strip() or "Unknown render error"
-        for line in stderr.splitlines():
+        err_msg = stderr_out.strip() or "Unknown render error"
+        for line in stderr_out.splitlines():
             if line.startswith("__FINAL_ERROR__"):
                 try:
                     err_obj = json.loads(line.replace("__FINAL_ERROR__", "").strip())
@@ -205,10 +310,11 @@ def execute_downloader_process(doc_id, output_path, start_page=1, end_page=None)
 
 
 def process_single_task(task_id, task_data):
-    """Processes a single document render task from end-to-end."""
+    """Processes a single document render task from end-to-end with real-time UI tracking."""
     doc_id = task_data.get("docId")
     chat_id = task_data.get("chatId")
     username = task_data.get("username", "User")
+    status_msg_id = task_data.get("statusMsgId")
 
     print(f"\n⚡ [START TASK] ID: {task_id} | Doc: {doc_id} | User: {username}")
 
@@ -216,21 +322,32 @@ def process_single_task(task_id, task_data):
     fb_put(f"queue/{task_id}/status", "processing")
     fb_put(f"queue/{task_id}/started_at", int(time.time()))
 
-    status_msg_id = send_telegram_msg(
-        chat_id,
-        f"⚡ *Rendering Started on 30GB Kaggle Cluster!*\n\n"
-        f"📖 *Doc ID:* `{doc_id}`\n"
-        f"🖥️ *Node:* Kaggle High-Mem Worker\n"
-        f"🔄 *Status:* Downloading full-resolution pages...\n\n"
-        f"⏳ _Please wait, your PDF is being generated..._"
-    )
+    # Initialize Live Status Tracker for Telegram UI
+    if not status_msg_id:
+        status_msg_id = send_telegram_msg(
+            chat_id,
+            f"🔍 *CONNECTING TO SCRIBD*\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Allocating 30GB Cloud Node...\n"
+            f"[██░░░░░░░░] 20%\n"
+            f"⏳ *Time:* 0.0s\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"👨‍💻 *Made by* @cryvex4"
+        )
+    tracker = StatusTracker(chat_id, status_msg_id, BOT_TOKEN)
 
     raw_pdf_path = os.path.join(DOWNLOAD_DIR, f"scribd_{doc_id}_raw.pdf")
     compressed_pdf_path = os.path.join(DOWNLOAD_DIR, f"scribd_{doc_id}_compressed.pdf")
 
     try:
-        # Step 1: Render via Puppeteer
-        render_res = execute_downloader_process(doc_id, raw_pdf_path)
+        def on_render_progress(prog):
+            stage = prog.get("stage", "rendering")
+            pct = prog.get("percent", 0)
+            text = prog.get("text", "")
+            tracker.update(stage, pct, text)
+
+        # Step 1: Render via Puppeteer with Real-time Progress
+        render_res = execute_downloader_process(doc_id, raw_pdf_path, on_progress=on_render_progress)
         title = render_res.get("title", f"Scribd Document {doc_id}")
         page_count = render_res.get("pageCount", "Full")
         raw_size = get_file_size_mb(raw_pdf_path)
@@ -238,25 +355,32 @@ def process_single_task(task_id, task_data):
         print(f"✅ Rendered raw PDF for {doc_id}: {page_count} pages, {raw_size} MB")
 
         # Step 2: Lossless Ghostscript Compression (ILovePDF ebook preset)
+        tracker.update("compressing", 88, f"Optimizing PDF ({raw_size} MB)...", force=True)
         comp_res = compress_pdf_lossless(raw_pdf_path, compressed_pdf_path, preset="/ebook")
         final_pdf_path = comp_res["final_path"]
         final_size = comp_res["final_size_mb"]
 
         print(f"🗜️ Ghostscript Finished: {raw_size} MB ➔ {final_size} MB ({comp_res['reduction_pct']}% reduction)")
 
+        total_elapsed = round(time.time() - tracker.start_time, 1)
+
         # Step 3: Direct Telegram vs High-Speed Cloud Link (No multi-parts!)
         if final_size > 49.0:
+            tracker.update("uploading", 95, f"Uploading Ultra HD PDF to Cloud ({final_size} MB)...", force=True)
             print(f"📦 Large Document ({final_size} MB) > 49MB: Uploading single Ultra HD PDF to Cloud...")
             download_url = upload_to_temp_cloud(final_pdf_path)
             if not download_url:
                 raise RuntimeError("Temporary cloud upload failed.")
+
+            # Delete progress status message
+            tracker.delete()
 
             msg_text = (
                 f"📚 *{title}*\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"📑 *Pages:* {page_count}\n"
                 f"📦 *File Size:* {final_size} MB (Ultra HD 100% Original Quality)\n"
-                f"⚡ *Mode:* Single Complete PDF (Full Book)\n"
+                f"⚡ *Speed:* {total_elapsed}s\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"🚀 *Your Document is ready for 1-Click High-Speed Download!*\n\n"
                 f"👉 [Click Here to Download Full PDF]({download_url})\n\n"
@@ -282,18 +406,30 @@ def process_single_task(task_id, task_data):
                 raise RuntimeError("Failed to send download button on Telegram.")
 
         else:
+            tracker.update("uploading", 95, f"Uploading PDF to Telegram ({final_size} MB)...", force=True)
             caption = (
                 f"📚 *{title}*\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"📑 *Pages:* {page_count}\n"
-                f"📦 *File Size:* {final_size} MB (Ultra HD 100% Quality)\n"
-                f"⚡ *Engine:* Kaggle 30GB Cloud Compute\n"
+                f"📦 *File Size:* {final_size} MB\n"
+                f"⚡ *Speed:* {total_elapsed}s\n"
+                f"🎯 *Quality:* 100% Crisp Vector HD\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"🤖 *Downloaded via:* @cryvex_uploader_bot\n"
                 f"👨‍💻 *Developer:* @cryvex4"
             )
+            reply_markup = {
+                "inline_keyboard": [
+                    [
+                        {"text": "💬 Support (@cryvex4)", "url": "https://t.me/cryvex4"}
+                    ]
+                ]
+            }
 
-            file_id = send_telegram_doc(chat_id, final_pdf_path, caption)
+            file_id = send_telegram_doc(chat_id, final_pdf_path, caption, reply_markup=reply_markup)
+
+            # Delete progress status message
+            tracker.delete()
 
             if file_id:
                 # Step 5: Save Telegram file_id to Firebase Cloud Cache (0.2s instant for next user!)
@@ -316,6 +452,7 @@ def process_single_task(task_id, task_data):
     except Exception as e:
         err_str = str(e)
         print(f"❌ [TASK FAILED] {task_id}: {err_str}")
+        tracker.delete()
         fb_put(f"queue/{task_id}/status", "failed")
         fb_put(f"queue/{task_id}/error", err_str)
         send_telegram_msg(

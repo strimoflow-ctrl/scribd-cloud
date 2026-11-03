@@ -193,6 +193,13 @@ async function renderScribdDocument(docId, rawOutputPath, startPage = 1, endPage
     const effectiveEnd = endPage ? Math.min(detectedTotal, parseInt(endPage, 10)) : detectedTotal;
     const totalToCapture = effectiveEnd - effectiveStart + 1;
 
+    console.log(JSON.stringify({
+      stage: 'connecting',
+      percent: 25,
+      docTitle,
+      text: `🚀 Opening: ${docTitle}`
+    }));
+
     // Fast jump to start page
     if (effectiveStart > 1) {
       await page.evaluate((s) => {
@@ -225,7 +232,8 @@ async function renderScribdDocument(docId, rawOutputPath, startPage = 1, endPage
         percent: pct,
         currentPage: i,
         totalPages: effectiveEnd,
-        docTitle
+        docTitle,
+        text: `Rendering page ${pageIdx} of ${totalToCapture}...`
       }));
 
       // Scroll to page
