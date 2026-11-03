@@ -352,6 +352,9 @@ def process_single_task(task_id, task_data):
 
         print(f"✅ Rendered raw PDF for {doc_id}: {page_count} pages, {raw_size} MB")
 
+        if not page_count or page_count == 0 or raw_size < 0.01:
+            raise RuntimeError("Rendered PDF contains 0 pages (Cloudflare Challenge Blocked). Please check residential proxy.")
+
         # Step 2: Lossless Ghostscript Compression (ILovePDF ebook preset)
         tracker.update("compressing", 88, f"Optimizing PDF ({raw_size} MB)...", force=True)
         comp_res = compress_pdf_lossless(raw_pdf_path, compressed_pdf_path, preset="/ebook")

@@ -312,6 +312,10 @@ async function renderScribdDocument(docId, rawOutputPath, startPage = 1, endPage
 
     await browser.close();
 
+    if (capturedCount === 0) {
+      throw new Error(`Document capture returned 0 pages (Cloudflare Challenge or Access Denied). Ensure residential proxy is active.`);
+    }
+
     // Assemble final PDF
     if (tempChunks.length === 1) {
       fs.renameSync(tempChunks[0], rawOutputPath);

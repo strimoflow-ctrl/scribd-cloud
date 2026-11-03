@@ -44,12 +44,13 @@ if SERVER_URL:
         print(f"⚠️ Handshake connection notice: {e}")
 
 # Fallback to local environment if running locally/offline
+DEFAULT_RESIDENTIAL_PROXY = "http://exgyempf:vmto3im799sb@45.38.107.97:6014"
 if not FIREBASE_DB_URL:
     FIREBASE_DB_URL = os.environ.get("FIREBASE_DB_URL", "").strip().rstrip("/")
 if not BOT_TOKEN:
     BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 if not PROXY_URL:
-    PROXY_URL = os.environ.get("PROXY_URL", "").strip()
+    PROXY_URL = os.environ.get("PROXY_URL", DEFAULT_RESIDENTIAL_PROXY).strip() or DEFAULT_RESIDENTIAL_PROXY
 
 WORKING_DIR = "/kaggle/working" if os.path.exists("/kaggle/working") else os.path.dirname(os.path.abspath(__file__))
 DOWNLOAD_DIR = os.path.join(WORKING_DIR, "downloads")
