@@ -212,15 +212,8 @@ async function renderScribdDocument(docId, rawOutputPath, startPage = 1, endPage
     let chunkCount = 0;
     let capturedCount = 0;
 
-    // Adaptive JPEG quality: keeps 1000+ page documents under Telegram's 50MB limit
-    let screenshotQuality = 75;
-    if (totalToCapture > 600) {
-      screenshotQuality = 40; // ~35KB/page -> 1000 pages = ~35-38 MB
-    } else if (totalToCapture > 250) {
-      screenshotQuality = 52; // ~50KB/page -> 400 pages = ~20 MB
-    } else if (totalToCapture > 80) {
-      screenshotQuality = 65; // ~75KB/page -> 150 pages = ~11 MB
-    }
+    // Ultra HD Original Quality: 100% crisp text and clear high-res diagrams
+    const screenshotQuality = 85;
 
     for (let i = effectiveStart; i <= effectiveEnd; i++) {
       const pageIdx = i - effectiveStart + 1;

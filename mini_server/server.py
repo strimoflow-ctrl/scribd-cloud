@@ -341,24 +341,47 @@ def handle_incoming_message(msg):
 
     # 1. ⚡ SMART CACHE CHECK (0.2s Instant Delivery)
     cached = get_cached_doc(doc_id)
-    if cached and cached.get("file_id"):
-        STATS["cache_hits"] += 1
+    if cached:
         title = cached.get("title", "Scribd Document")
         pages = cached.get("totalPages", "Full")
-        bot.send_document(
-            chat_id,
-            cached["file_id"],
-            caption=(
+        if cached.get("file_id"):
+            STATS["cache_hits"] += 1
+            bot.send_document(
+                chat_id,
+                cached["file_id"],
+                caption=(
+                    f"📚 *{title}*\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"📑 *Pages:* {pages}\n"
+                    f"⚡ *Delivered Instantly via High-Speed Cloud Cache!* (0.2s)\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"🤖 *Downloaded via:* @cryvex_uploader_bot\n"
+                    f"👨‍💻 *Developer:* @cryvex4"
+                )
+            )
+            return
+        elif cached.get("download_url"):
+            STATS["cache_hits"] += 1
+            f_size = cached.get("fileSizeMb", "Ultra HD")
+            markup = telebot.types.InlineKeyboardMarkup()
+            markup.add(telebot.types.InlineKeyboardButton(f"🚀 Download Full PDF ({f_size} MB)", url=cached["download_url"]))
+            bot.send_message(
+                chat_id,
                 f"📚 *{title}*\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"📑 *Pages:* {pages}\n"
+                f"📦 *File Size:* {f_size} MB (Ultra HD 100% Quality)\n"
                 f"⚡ *Delivered Instantly via High-Speed Cloud Cache!* (0.2s)\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"🤖 *Downloaded via:* @ScribdPdfDownloaderBot\n"
-                f"👨‍💻 *Developer:* @cryvex4"
+                f"🚀 *Your Document is ready for 1-Click High-Speed Download!*\n\n"
+                f"👉 [Click Here to Download Full PDF]({cached['download_url']})\n\n"
+                f"⏰ _Note: High-speed direct link is active for 24-48 hours._\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"🤖 *Downloaded via:* @cryvex_uploader_bot\n"
+                f"👨‍💻 *Developer:* @cryvex4",
+                reply_markup=markup
             )
-        )
-        return
+            return
 
     # 2. PUSH TASK TO FIREBASE QUEUE FOR KAGGLE
     task_id = f"task_{doc_id}_{int(time.time())}"

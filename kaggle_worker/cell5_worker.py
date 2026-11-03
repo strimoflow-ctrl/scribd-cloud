@@ -68,6 +68,64 @@ def send_telegram_msg(chat_id, text, reply_to_message_id=None):
     return None
 
 
+def send_telegram_button(chat_id, text, download_url, btn_text):
+    """Sends a message with an interactive download button on Telegram."""
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "Markdown",
+        "reply_markup": {
+            "inline_keyboard": [[
+                {"text": btn_text, "url": download_url}
+            ]]
+        }
+    }
+    try:
+        r = requests.post(url, json=payload, timeout=10)
+        return r.ok
+    except Exception as e:
+        print(f"⚠️ [Telegram Button Error]: {e}")
+    return False
+
+
+def upload_to_temp_cloud(filepath):
+    """Uploads large (>50MB) Ultra HD PDF to high-speed temporary cloud (GoFile / Filebin)."""
+    filename = os.path.basename(filepath)
+    size_mb = get_file_size_mb(filepath)
+    print(f"☁️ Uploading large Ultra HD file '{filename}' ({size_mb} MB) to Temporary Cloud...")
+
+    # Provider 1: GoFile.io (High speed, unlimited size, free)
+    try:
+        s_res = requests.get("https://api.gofile.io/servers", timeout=10).json()
+        if s_res.get("status") == "ok" and s_res.get("data", {}).get("servers"):
+            server = s_res["data"]["servers"][0]["name"]
+            up_url = f"https://{server}.gofile.io/contents/uploadfile"
+            with open(filepath, "rb") as f:
+                r = requests.post(up_url, files={"file": (filename, f)}, timeout=600)
+                if r.ok and r.json().get("status") == "ok":
+                    dpage = r.json().get("data", {}).get("downloadPage")
+                    if dpage:
+                        print(f"✅ [GoFile Upload Success]: {dpage}")
+                        return dpage
+    except Exception as e:
+        print(f"⚠️ GoFile upload notice: {e}")
+
+    # Provider 2: Filebin.net Fallback
+    try:
+        bin_id = f"scribd_{int(time.time())}"
+        with open(filepath, "rb") as f:
+            r = requests.post(f"https://filebin.net/{bin_id}/{filename}", data=f, timeout=600)
+            if r.status_code in (200, 201):
+                url = f"https://filebin.net/{bin_id}/{filename}"
+                print(f"✅ [Filebin Upload Success]: {url}")
+                return url
+    except Exception as e:
+        print(f"⚠️ Filebin upload notice: {e}")
+
+    return None
+
+
 def send_telegram_doc(chat_id, pdf_path, caption):
     """Uploads document directly from Kaggle compute to Telegram (0% Render bandwidth)."""
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
@@ -186,56 +244,50 @@ def process_single_task(task_id, task_data):
 
         print(f"🗜️ Ghostscript Finished: {raw_size} MB ➔ {final_size} MB ({comp_res['reduction_pct']}% reduction)")
 
-        # Step 3: Check Telegram 50MB file size ceiling
-        uploaded_parts = []
+        # Step 3: Direct Telegram vs High-Speed Cloud Link (No multi-parts!)
         if final_size > 49.0:
-            print(f"⚠️ Document ({final_size} MB) exceeds Telegram 49MB limit! Auto-splitting into parts...")
-            num_parts = int(math.ceil(final_size / 42.0))
-            pages_total = int(page_count) if (isinstance(page_count, int) or str(page_count).isdigit()) else 500
-            pages_per_part = int(math.ceil(pages_total / num_parts))
+            print(f"📦 Large Document ({final_size} MB) > 49MB: Uploading single Ultra HD PDF to Cloud...")
+            download_url = upload_to_temp_cloud(final_pdf_path)
+            if not download_url:
+                raise RuntimeError("Temporary cloud upload failed.")
 
-            for p_idx in range(num_parts):
-                p_start = p_idx * pages_per_part + 1
-                p_end = min((p_idx + 1) * pages_per_part, pages_total)
-                part_pdf = os.path.join(DOWNLOAD_DIR, f"scribd_{doc_id}_part{p_idx+1}.pdf")
-
-                # Fast Ghostscript Page Extraction
-                slice_cmd = [
-                    "gs", "-sDEVICE=pdfwrite", "-dCompatibilityLevel=1.4",
-                    "-dNOPAUSE", "-dQUIET", "-dBATCH",
-                    f"-dFirstPage={p_start}", f"-dLastPage={p_end}",
-                    f"-sOutputFile={part_pdf}", final_pdf_path
-                ]
-                subprocess.check_call(slice_cmd)
-                part_size = get_file_size_mb(part_pdf)
-
-                part_caption = (
-                    f"📚 *{title}* (Part {p_idx+1}/{num_parts})\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📑 *Pages:* {p_start} - {p_end} (of {pages_total})\n"
-                    f"🗜️ *Part Size:* {part_size} MB\n"
-                    f"⚡ *Engine:* Ghostscript Lossless + Kaggle 30GB Cloud\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"🤖 *Downloaded via:* @cryvex_uploader_bot\n"
-                    f"👨‍💻 *Developer:* @cryvex4"
-                )
-                fid = send_telegram_doc(chat_id, part_pdf, part_caption)
-                if fid:
-                    uploaded_parts.append(fid)
-
-            if uploaded_parts:
+            msg_text = (
+                f"📚 *{title}*\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"📑 *Pages:* {page_count}\n"
+                f"📦 *File Size:* {final_size} MB (Ultra HD 100% Original Quality)\n"
+                f"⚡ *Mode:* Single Complete PDF (Full Book)\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"🚀 *Your Document is ready for 1-Click High-Speed Download!*\n\n"
+                f"👉 [Click Here to Download Full PDF]({download_url})\n\n"
+                f"⏰ _Note: High-speed direct link is active for 24-48 hours._\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"🤖 *Downloaded via:* @cryvex_uploader_bot\n"
+                f"👨‍💻 *Developer:* @cryvex4"
+            )
+            btn_title = f"🚀 Download Full Ultra HD PDF ({final_size} MB)"
+            ok = send_telegram_button(chat_id, msg_text, download_url, btn_title)
+            if ok:
+                cache_payload = {
+                    "download_url": download_url,
+                    "title": title,
+                    "totalPages": page_count,
+                    "cachedAt": int(time.time()),
+                    "fileSizeMb": final_size
+                }
+                fb_put(f"cache/{doc_id}", cache_payload)
                 fb_delete(f"queue/{task_id}")
-                print(f"🎉 [TASK COMPLETED] Doc {doc_id} delivered in {len(uploaded_parts)} parts successfully!")
+                print(f"🎉 [TASK COMPLETED] Doc {doc_id} delivered via Cloud Link successfully!")
             else:
-                raise RuntimeError("Telegram rejected part uploads.")
+                raise RuntimeError("Failed to send download button on Telegram.")
 
         else:
             caption = (
                 f"📚 *{title}*\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"📑 *Pages:* {page_count}\n"
-                f"🗜️ *Original:* {raw_size} MB ➔ *Compressed:* {final_size} MB (-{comp_res['reduction_pct']}%)\n"
-                f"⚡ *Engine:* Ghostscript Lossless + Kaggle 30GB Cloud\n"
+                f"📦 *File Size:* {final_size} MB (Ultra HD 100% Quality)\n"
+                f"⚡ *Engine:* Kaggle 30GB Cloud Compute\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"🤖 *Downloaded via:* @cryvex_uploader_bot\n"
                 f"👨‍💻 *Developer:* @cryvex4"
