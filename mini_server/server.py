@@ -202,9 +202,10 @@ def compile_worker_notebook_json():
 
 
 LAST_KAGGLE_TRIGGER_TIME = 0
+KAGGLE_TRIGGER_LOCK = threading.Lock()
 
 def trigger_kaggle_worker(force=False, reason="Auto-Rotation"):
-    """Pushes fresh notebook to Kaggle to start or rotate the 30GB compute session."""
+    """Pushes fresh notebook to Kaggle to start or rotate the 30GB compute session with strict anti-spam locking."""
     global LAST_KAGGLE_TRIGGER_TIME
 
     if not KAGGLE_USERNAME or not KAGGLE_KEY:
@@ -213,60 +214,77 @@ def trigger_kaggle_worker(force=False, reason="Auto-Rotation"):
         send_admin_alert("Kaggle Launch Failed", "KAGGLE_USERNAME or KAGGLE_KEY is missing in Render Environment!", "WARNING")
         return False, err
 
-    now = time.time()
-    # Enforce strict 10-minute cooldown to prevent multiple spam launches!
-    if not force and (now - LAST_KAGGLE_TRIGGER_TIME) < 600:
-        remaining = int(600 - (now - LAST_KAGGLE_TRIGGER_TIME))
-        print(f"⏳ [Kaggle Cooldown] Launch blocked. Cooldown active for {remaining}s.")
-        return False, f"Cooldown active: Please wait {remaining} seconds before launching another session."
+    with KAGGLE_TRIGGER_LOCK:
+        now = time.time()
 
-    try:
-        print(f"🚀 [Kaggle Orchestrator] Compiling notebook for user '{KAGGLE_USERNAME}' slug '{KAGGLE_SLUG}'...")
-        notebook_json = compile_worker_notebook_json()
-        creds = base64.b64encode(f"{KAGGLE_USERNAME}:{KAGGLE_KEY}".encode()).decode()
-        headers = {
-            "Authorization": f"Basic {creds}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "id": None,
-            "slug": f"{KAGGLE_USERNAME}/{KAGGLE_SLUG}",
-            "title": KAGGLE_TITLE,
-            "text": notebook_json,
-            "language": "python",
-            "kernelType": "notebook",
-            "isPrivate": True,
-            "enableGpu": False,
-            "enableInternet": True,
-            "datasetSources": [],
-            "competitionSources": [],
-            "kernelSources": []
-        }
-        url = "https://www.kaggle.com/api/v1/kernels/push"
-        resp = session.post(url, headers=headers, json=payload, timeout=30)
-        print(f"📋 [Kaggle Push Response] Status: {resp.status_code} | Body: {resp.text}")
+        # Check persistent last trigger timestamp from Firebase (persists across server restarts!)
+        last_fb_trigger = 0
+        try:
+            r = session.get(fb_url("control/last_triggered_at"), timeout=4)
+            if r.ok and r.json():
+                last_fb_trigger = float(r.json())
+        except Exception:
+            pass
 
-        if resp.status_code in (200, 201):
-            LAST_KAGGLE_TRIGGER_TIME = now
-            try:
-                session.put(fb_url("control/last_triggered_at"), json=int(now), timeout=5)
-            except Exception:
-                pass
-            send_admin_alert("Kaggle Worker Launched", f"New 30GB compute node started!\nReason: {reason}", "SUCCESS")
-            return True, "Kaggle Worker launched successfully! 30GB node is booting."
-        else:
-            try:
-                err_data = resp.json()
-                msg = err_data.get("message") or err_data.get("error") or str(err_data)
-            except Exception:
-                msg = resp.text[:200]
-            send_admin_alert("Kaggle Launch Rejected", f"Kaggle API [{resp.status_code}]: {msg}", "WARNING")
-            return False, f"Kaggle API [{resp.status_code}]: {msg}"
+        effective_last_time = max(LAST_KAGGLE_TRIGGER_TIME, last_fb_trigger)
+        elapsed = now - effective_last_time
 
-    except Exception as e:
-        print(f"❌ [Kaggle Push Failed] {e}")
-        send_admin_alert("Kaggle Launch Exception", str(e), "WARNING")
-        return False, str(e)
+        # Strict 10-Minute Anti-Duplicate Lock (Guarantees NO double sessions)
+        if not force and elapsed < 600:
+            remaining = int(600 - elapsed)
+            msg = f"Anti-Duplicate Lock: A Kaggle session was launched {int(elapsed)}s ago. Next launch permitted in {remaining}s."
+            print(f"⏳ [Kaggle Lock] {msg}")
+            return False, msg
+
+        try:
+            print(f"🚀 [Kaggle Orchestrator] Compiling notebook for user '{KAGGLE_USERNAME}' slug '{KAGGLE_SLUG}' (Reason: {reason})...")
+            notebook_json = compile_worker_notebook_json()
+            creds = base64.b64encode(f"{KAGGLE_USERNAME}:{KAGGLE_KEY}".encode()).decode()
+            headers = {
+                "Authorization": f"Basic {creds}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "id": None,
+                "slug": f"{KAGGLE_USERNAME}/{KAGGLE_SLUG}",
+                "title": KAGGLE_TITLE,
+                "text": notebook_json,
+                "language": "python",
+                "kernelType": "notebook",
+                "isPrivate": True,
+                "enableGpu": False,
+                "enableInternet": True,
+                "datasetSources": [],
+                "competitionSources": [],
+                "kernelSources": []
+            }
+            url = "https://www.kaggle.com/api/v1/kernels/push"
+            resp = session.post(url, headers=headers, json=payload, timeout=30)
+            print(f"📋 [Kaggle Push Response] Status: {resp.status_code} | Body: {resp.text}")
+
+            if resp.status_code in (200, 201):
+                LAST_KAGGLE_TRIGGER_TIME = now
+                # Persist timestamp & immediately reset trigger flag to prevent second thread firing
+                try:
+                    session.put(fb_url("control/last_triggered_at"), json=int(now), timeout=5)
+                    session.put(fb_url("control/trigger_restart"), json=False, timeout=5)
+                except Exception:
+                    pass
+                send_admin_alert("Kaggle Worker Launched", f"New 30GB compute node started!\nReason: {reason}", "SUCCESS")
+                return True, "Kaggle Worker launched successfully! 30GB node is booting."
+            else:
+                try:
+                    err_data = resp.json()
+                    msg = err_data.get("message") or err_data.get("error") or str(err_data)
+                except Exception:
+                    msg = resp.text[:200]
+                send_admin_alert("Kaggle Launch Rejected", f"Kaggle API [{resp.status_code}]: {msg}", "WARNING")
+                return False, f"Kaggle API [{resp.status_code}]: {msg}"
+
+        except Exception as e:
+            print(f"❌ [Kaggle Push Failed] {e}")
+            send_admin_alert("Kaggle Launch Exception", str(e), "WARNING")
+            return False, str(e)
 
 
 # -------------------------------------------------------------
@@ -277,14 +295,14 @@ def start_watchdog_thread():
     print("🛡️ [Watchdog] Heartbeat and Auto-Restart listener active...")
     while True:
         try:
-            # 1. Check if worker cleanly requested restart (11-hour mark)
+            # 1. Check if worker requested restart via Firebase fallback
             r = session.get(fb_url("control/trigger_restart"), timeout=5)
             if r.ok:
                 val = r.json()
                 if val is True:
-                    print("⚡ [Auto-Restart] 11-hour handoff requested by Kaggle worker!")
+                    print("⚡ [Auto-Restart] 11-hour handoff requested via Firebase!")
                     session.put(fb_url("control/trigger_restart"), json=False, timeout=5)
-                    trigger_kaggle_worker(force=True, reason="11-Hour Zero-Downtime Session Handoff")
+                    trigger_kaggle_worker(force=False, reason="11-Hour Session Handoff (Firebase Watchdog)")
 
             # 2. Check worker heartbeat - only trigger if dead for > 15 mins AND pending tasks exist
             status_res = session.get(fb_url("worker/heartbeat"), timeout=5)
@@ -1082,8 +1100,8 @@ class RenderHealthServer(BaseHTTPRequestHandler):
 
             req_auth = req_data.get("auth_key") or self.headers.get("X-Worker-Key") or ""
             if req_auth == WORKER_AUTH_KEY:
-                ok, msg = trigger_kaggle_worker(force=True, reason="11-Hour Zero-Downtime Session Handoff (Direct API)")
-                self.send_response(200)
+                ok, msg = trigger_kaggle_worker(force=False, reason="11-Hour Session Handoff (Direct API)")
+                self.send_response(200 if ok else 429)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
                 self.wfile.write(json.dumps({"status": "ok", "launched": ok, "message": msg}).encode("utf-8"))

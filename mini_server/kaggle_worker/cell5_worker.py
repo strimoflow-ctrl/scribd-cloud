@@ -550,20 +550,29 @@ def heartbeat_loop():
             if uptime >= MAX_RUNTIME_SECONDS:
                 if active_count == 0:
                     print("⏰ [11-Hour Reached] No active rendering jobs! Initiating zero-downtime handoff...")
+                    handoff_success = False
                     if SERVER_URL:
                         try:
-                            requests.post(
+                            resp = requests.post(
                                 f"{SERVER_URL}/api/worker/restart-request",
                                 json={"auth_key": WORKER_AUTH_KEY, "reason": "11-Hour Session Handoff"},
-                                timeout=5
+                                timeout=10
                             )
-                        except Exception:
-                            pass
-                    fb_put("control/trigger_restart", True)
-                    time.sleep(10)
+                            if resp.status_code in (200, 429):
+                                handoff_success = True
+                                print("✅ [Session Handoff] Mini-Server received restart signal successfully!")
+                        except Exception as e:
+                            print(f"⚠️ [Session Handoff] Mini-Server HTTP failed: {e}")
+
+                    # Fallback to Firebase ONLY if Mini-Server was completely unreachable
+                    if not handoff_success:
+                        print("⚠️ [Session Handoff] Falling back to Firebase trigger...")
+                        fb_put("control/trigger_restart", True)
+
+                    print("🛑 Clean Kaggle session termination. Exiting container to hand off compute...")
                     STOP_REQUESTED = True
-                    print("🛑 Clean Kaggle session termination. Next session pushed by Mini-Server!")
-                    break
+                    time.sleep(10)
+                    os._exit(0)
                 else:
                     print(f"⏳ [11-Hour Warning] {active_count} jobs still active. Waiting before handoff...")
 
